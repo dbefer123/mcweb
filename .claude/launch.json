@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "spike",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["tools/static-server.mjs", "spike/webimage/web", "4180"],
+      "port": 4180
+    }
+  ]
+}

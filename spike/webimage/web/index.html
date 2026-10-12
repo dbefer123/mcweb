@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Web Image Spike</title>
+<style>
+  :root { color-scheme: light dark; --bg: #f6f6f4; --fg: #1d1d1b; --muted: #6b6b66; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #161615; --fg: #ecebe6; --muted: #9a9993; } }
+  body { margin: 0; padding: 16px; background: var(--bg); color: var(--fg); font: 14px/1.45 system-ui, sans-serif; }
+  canvas { width: 320px; height: 240px; border: 1px solid var(--muted); display: block; margin-bottom: 12px; }
+  pre { white-space: pre-wrap; font: 12px/1.4 ui-monospace, monospace; }
+</style>
+</head>
+<body>
+<canvas id="gpu" width="320" height="240"></canvas>
+<pre id="out">loading…</pre>
+<script src="host.js"></script>
+</body>
+</html>

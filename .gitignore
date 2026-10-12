@@ -1,0 +1,23 @@
+# Build output and caches
+/build/
+/dist/
+/.cache/
+**/out/
+node_modules/
+.gradle/
+
+# Mojang-derived inputs and outputs: never commit or publish these.
+# (client jar, libraries, assets, baked jars, compiled game images)
+/inputs/
+*.jar
+!gradle/wrapper/gradle-wrapper.jar
+*.wasm
+*.wat
+game-bundle/
+
+# Local secrets
+.env
+.env.*
+
+# Generated spike outputs
+spike/webimage/web/spike.js

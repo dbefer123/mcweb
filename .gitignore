@@ -13,6 +13,7 @@ node_modules/
 !gradle/wrapper/gradle-wrapper.jar
 *.wasm
 *.wat
+!tools/watpatch/*.wat
 game-bundle/
 
 # Local secrets

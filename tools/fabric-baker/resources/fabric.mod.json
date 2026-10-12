@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "id": "mcweb-baker",
+  "version": "1.0.0",
+  "name": "MC Web Baker",
+  "description": "Build-time only: bakes mixins and class transforms into static jars, then halts.",
+  "environment": "*",
+  "entrypoints": {
+    "preLaunch": ["dev.mcwebclient.baker.BakerPreLaunch"]
+  },
+  "depends": {
+    "fabricloader": "*"
+  }
+}

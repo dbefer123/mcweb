@@ -9,8 +9,8 @@ rendered with WebGPU, singleplayer in a Worker, multiplayer through a WebSocket�
 | Phase | State |
 |---|---|
 | 0. Toolchain spike | **Done: go** (2026-10-12) |
-| 1. Inputs + Fabric baker + desktop checkpoint | Next |
-| 2. Headless image | — |
+| 1. Inputs + Fabric baker + desktop checkpoint | **Done** (2026-10-12) — local-server join deferred to Phase 5 |
+| 2. Headless image | Next |
 | 3. Rendering + input | — |
 | 4. Singleplayer | — |
 | 5. Multiplayer | — |
@@ -59,8 +59,41 @@ rendered with WebGPU, singleplayer in a Worker, multiplayer through a WebSocket�
    from Java-written `nmem` data.
 10. Spike build time ~30 s, peak builder RSS 1.6 GB, wasm 8–10 MB.
 
-## Next (Phase 1)
+## Phase 1 results
 
-- `tools/stage-inputs.mjs`: copy 26.3 jar/libraries/assets from Prism, mods + config.
-- `tools/fabric-baker`: Knot headless → transform all classes → baked jar + BakedFabricData.
-- Desktop checkpoint: baked jar runs on plain Java 25 without Fabric's transformer.
+Commands (in order): `node tools/stage-inputs.mjs` → `node tools/bake.mjs` →
+`node tools/run-baked.mjs --selftest [--trace]`.
+
+- **stage-inputs** reads `mmc-pack.json` + Prism meta → `inputs/manifest.json` (74 libraries incl.
+  LWJGL 3.4.3 Windows natives, Fabric Loader 0.19.5, Mixin 0.17.4/0.8.7, ASM 9.10.1), copies the 7
+  mods, 9 config files and `options.txt` to `inputs/instance/`. Asset index 34 is read in place.
+- **bake** runs the real Knot launcher with a build-only mod (`tools/fabric-baker`, preLaunch) and a
+  capture agent. Output `build/baked/`:
+  - `minecraft-baked.jar` 11,383 classes + 21,492 resources (entrypoint patch, class tweakers,
+    package widening, mixins; 572 classes changed by mixins)
+  - `mods-baked.jar` 4,078 classes + mod resources (no `fabric.mod.json`, so never seen as a mod)
+  - `libs-baked.jar` mixin targets in libraries: DFU `TaggedChoice(+$TaggedChoiceType)`,
+    Brigadier `ContextChain`
+  - 1,046 mixin classes dropped; 13 Mixin-generated `$Anonymous$<hash>` classes; 6 MixinExtras
+    `LocalRef*Impl` classes defined via `Lookup.defineClass` (captured by the agent);
+    30 unresolved refs are optional integrations (ModMenu, Controlify) and annotations. 0 failures.
+  - Gotchas: `getClassByteArray(name, true)` returns *pre*-mixin bytes; call
+    `IMixinTransformer.transformClassBytes` yourself (null bytes → generate synthetic class).
+    `Mixins.getConfigs()` is only the *pending* set, so library targets come from `@Mixin`
+    annotations on the skipped mixin classes.
+- **BakedLauncher** (`platform/fabric`) mirrors `Knot.init` without class loader/Mixin: game provider
+  locate/initialize (no remap: 26.3 intermediary is an empty identity file), `load`, `freeze`,
+  `loadClassTweakers`, preLaunch entrypoints, then `MinecraftGameProvider.launch`.
+- **Self-test** (`platform/selftest`, `-Dmcweb.selftest=true`): title → screenshot → fixed-seed
+  creative world → terrain → screenshot → `PASS` → quit. Desktop run: PASS, ~60–75 FPS, both
+  screenshots correct (Sodium renderer, 57 mods). 26.3 API notes: screen/overlay are on `Gui`
+  (`mc.gui.screen()`), render target is `mc.gameRenderer.mainRenderTarget()`.
+- **Trace:** `build/trace-config/reachability-metadata.json` (170 KB) from a traced self-test run.
+- 26.3 uses SDL3 (not GLFW), and LWJGL shaderc/spvc/spng/freetype/jemalloc/vma natives → all need
+  browser replacements. Vanilla has an MDI chunk path (`prepareChunkRendersIndirect`).
+
+## Next (Phase 2)
+
+- Spike: Inflater/Deflater, zipfs, `resource:` NIO FS, jimfs behaviour in Web Image.
+- First full image attempt: baked jars + libs, logging → simple SLF4J provider, LWJGL natives,
+  threads/executors (inline first), main loop driven by requestAnimationFrame.

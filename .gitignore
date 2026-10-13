@@ -22,6 +22,7 @@ game-bundle/
 
 # Generated spike outputs
 spike/webimage/web/spike.js
+spike/webimage/web/s3/
 
 # Downloaded third-party deps
 /.cache/

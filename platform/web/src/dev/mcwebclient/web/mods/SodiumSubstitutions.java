@@ -108,7 +108,10 @@ final class Target_org_joml_FrustumIntersection {
  */
 @Substitute
 @TargetClass(className = "net.caffeinemc.mods.sodium.client.render.viewport.frustum.SimpleFrustum")
-final class Target_net_caffeinemc_mods_sodium_client_render_viewport_frustum_SimpleFrustum {
+// A class-level substitution replaces the declaration too: keep the interface, or calls
+// through Frustum fail at run time (IncompatibleClassChangeError in section culling).
+final class Target_net_caffeinemc_mods_sodium_client_render_viewport_frustum_SimpleFrustum
+        implements net.caffeinemc.mods.sodium.client.render.viewport.frustum.Frustum {
     private final float nxX, nxY, nxZ, negNxW;
     private final float pxX, pxY, pxZ, negPxW;
     private final float nyX, nyY, nyZ, negNyW;

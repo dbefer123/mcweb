@@ -356,6 +356,21 @@ stub). Further fixes on the way to the title screen:
   rendering at ~30 fps. The client then failed to open the in-memory connection: Netty
   creates `LocalServerChannel` reflectively → reflection metadata for the Netty channel
   constructors.
+- With the metadata, the in-memory connection opens (`Netty Local IO` green threads) and the
+  client's first packet fails to encode: Netty's adaptive allocator wants a direct buffer,
+  its build-time-chosen CleanerJava25 allocates through an FFM arena → Unsafe.allocateMemory
+  → Web Image has no unmanaged malloc. Fixes: Netty on heap buffers only (unpooled
+  allocator, `noPreferDirect`, `directBufferPreferred`/`canReliabilyFreeDirectBuffers`
+  substituted to false), and Unsafe's allocate/free/realloc/setMemory/copyMemory on nmem
+  (NativeHeap) as a safety net for any `ByteBuffer.allocateDirect`.
+  Pitfall: an `@Alias` of a native that SVM substitutes elsewhere (here `copyMemory0`)
+  binds to the bare native, not to the substitution → "unsupported native method" and a
+  black screen. Heap cases are done in our code instead (`ArrayCopies.heapToHeap/fillHeap`).
+- **Player joins the world** (2026-10-13): spawn preparation (48 chunks) takes ~10 s, then
+  `Player logged in with entity id 19`, view distance 16, Sodium's chunk builder starts.
+  The client crashed on its first world frame: IncompatibleClassChangeError in Sodium's
+  section culling. Cause: the class-level `SimpleFrustum` substitution didn't declare
+  `implements Frustum` (a class-level substitution replaces the declaration too).
 - **Deviation from the plan:** the integrated server runs as a green thread next to the
   client, not in a Worker. IntegratedServer is tied to the client's `Minecraft` object, and
   WasmGC heaps can't be shared between Workers (a Worker server would be a second image

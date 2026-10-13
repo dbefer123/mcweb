@@ -61,6 +61,10 @@ public final class WebRuntime {
         System.setProperty("joml.nounsafe", "true");
         // Same for Netty's direct buffer fast paths.
         System.setProperty("io.netty.noUnsafe", "true");
+        // Heap buffers only (see net/NettySubstitutions): the adaptive/pooled allocators
+        // count as pooling direct memory, so their ioBuffer() would still go direct.
+        System.setProperty("io.netty.allocator.type", "unpooled");
+        System.setProperty("io.netty.noPreferDirect", "true");
         // Mods logging through log4j-api (log4j-core isn't in the image): its simple
         // console provider instead of "could not find a logging provider".
         setIfMissing("log4j.provider", "org.apache.logging.log4j.simple.internal.SimpleProvider");

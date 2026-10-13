@@ -1,6 +1,8 @@
 "use strict";
 // Development host for the game image: log panel, stage display and the
 // requestAnimationFrame-driven frame callback that the Java side registers.
+// Java stack traces are built from JS stacks; V8 keeps only 10 frames by default.
+Error.stackTraceLimit = 200;
 (() => {
   const logEl = document.getElementById("log");
   const stageEl = document.getElementById("stage");
@@ -41,7 +43,7 @@
 
   globalThis.mcweb = {
     canvas: document.getElementById("game"),
-    onLog: append,
+    onLog() {}, // WebJs.log also writes to console.log, which is mirrored below
     onStage(stage) {
       stageEl.textContent = stage;
       append(`[host] stage: ${stage}`);
@@ -55,7 +57,15 @@
       frameCallback = cb;
     },
   };
-  // Java stdout/stderr also land in console.log; mirror errors raised outside Java.
+  // Java System.out/err go to console.log/error: mirror them into the panel too.
+  for (const level of ["log", "warn", "error"]) {
+    const original = console[level].bind(console);
+    console[level] = (...args) => {
+      original(...args);
+      append(args.map(String).join(" "));
+    };
+  }
+  // Mirror errors raised outside Java.
   addEventListener("error", (e) => append(`[host] ${e.message}`));
   addEventListener("unhandledrejection", (e) => append(`[host] unhandled: ${e.reason}`));
 

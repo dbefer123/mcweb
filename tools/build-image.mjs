@@ -97,7 +97,38 @@ run(JAVAC, ["-nowarn", "-Xlint:none", "-parameters", "--add-exports", "java.base
 console.log(`compiled ${sources.length} platform sources`);
 if (compileOnly) process.exit(0);
 
+// 3b. Reflection metadata: filtered from the desktop trace (tools/run-baked.mjs --trace).
+// Using the raw trace breaks Web Image (array types registered for reflection make
+// e.g. Feature[] fail an Enum[] cast at run time), and most of it is JDK/LWJGL/log4j
+// internals that are substituted or excluded here. Keep game, mod and Fabric entries.
+const reflectDir = join(IMG, "reflect-config");
+{
+  const KEEP = /^(net\.minecraft|com\.mojang|net\.fabricmc|net\.caffeinemc|dev\.tr7zw|malte0811|me\.flashyreese|com\.llamalad7|com\.google|org\.joml|it\.unimi)\./;
+  const typeName = (t) => (typeof t === "string" ? t : t?.proxy ? t.proxy.join(",") : JSON.stringify(t));
+  const trace = JSON.parse(readFileSync(join(BUILD, "trace-config", "reachability-metadata.json"), "utf8"));
+  const reflection = (trace.reflection || []).filter((e) => {
+    const name = typeName(e.type);
+    if (name.includes("[]")) return false;
+    if (typeof e.type === "object" && e.type.proxy) return e.type.proxy.every((p) => KEEP.test(p));
+    return KEEP.test(name);
+  });
+  // Resource bundles (e.g. Fabric's localized messages) must be registered explicitly.
+  const resources = (trace.resources || []).filter((r) => r.bundle);
+  mkdirSync(reflectDir, { recursive: true });
+  writeFileSync(join(reflectDir, "reachability-metadata.json"), JSON.stringify({ reflection, resources }, null, 1));
+  console.log(`reflection metadata: kept ${reflection.length} of ${(trace.reflection || []).length} traced entries`);
+}
+
 // 4. native-image.
+// Windows build hosts need a one-branch fix in the points-to analysis
+// (see tools/pointsto-patch/PointstoPatch.java).
+const pointstoPatch = join(BUILD, "pointsto-patch");
+if (process.platform === "win32" && !existsSync(join(pointstoPatch, "com"))) {
+  const asm = manifest.libraries.filter((l) => /^org\.ow2\.asm:asm(-tree)?:/.test(l.name)).map((l) => l.path);
+  run(join(GRAALVM_HOME, "bin", "java.exe"), ["-cp", asm.join(delimiter),
+    join(ROOT, "tools", "pointsto-patch", "PointstoPatch.java"),
+    join(GRAALVM_HOME, "lib", "svm", "builder", "pointsto.jar"), pointstoPatch]);
+}
 const out = join(IMG, "out");
 mkdirSync(out, { recursive: true });
 const imageCp = [classes, res, ...baked, ...libraries, ...deps].join(delimiter);
@@ -110,6 +141,7 @@ const disable = [
   "com.oracle.svm.webimage.substitute.system.Target_sun_misc_Unsafe_Web.park",
   "com.oracle.svm.webimage.substitute.system.Target_sun_misc_Unsafe_Web.unpark",
   "com.oracle.svm.webimage.substitute.system.Target_java_lang_Thread_Web.start0",
+  "com.oracle.svm.webimage.substitute.system.Target_java_util_concurrent_ForkJoinTask_Web.fork",
   "com.oracle.svm.webimage.substitute.system.Target_java_io_FileInputStream_Web.length0",
   "com.oracle.svm.webimage.substitute.system.Target_java_io_FileInputStream_Web.position0",
 ];
@@ -130,12 +162,13 @@ const niArgs = [
   `--parallelism=${parallelism}`,
   "-J-XX:GCTimeRatio=19",
   "--add-exports=java.base/jdk.internal.foreign=ALL-UNNAMED",
+  ...(process.platform === "win32" ? [`-J--patch-module=org.graalvm.nativeimage.pointsto=${pointstoPatch}`] : []),
   "-H:+DebugNames",
   "-H:+ReportExceptionStackTraces",
   `-H:WasmAsPath=${join(ROOT, "tools", "watpatch", "wasm-as.cmd")}`,
   ...disable.map((d) => `-H:DisableSubstitution=${d}`),
   ...resources.map((r) => `-H:IncludeResources=${r}`),
-  `-H:ConfigurationFileDirectories=${join(BUILD, "trace-config")}`,
+  ...(argv.includes("--no-trace-config") ? [] : [`-H:ConfigurationFileDirectories=${reflectDir}`]),
   // Netty's bundled config creates SLF4J loggers at build time, so our logger types
   // end up in the image heap; they hold no runtime state, so initialize them early too.
   "--initialize-at-build-time=dev.mcwebclient.web.log.WebLogger,dev.mcwebclient.web.log.WebSlf4jProvider,dev.mcwebclient.web.log.WebSlf4jProvider$Factory",
@@ -151,4 +184,8 @@ writeFileSync(argfile, niArgs.map((a) => `"${a.replace(/\\/g, "\\\\").replace(/"
 const t0 = Date.now();
 run("cmd", ["/c", join(ROOT, "tools", "ni.cmd"), "--tool:svm-wasm", `@${argfile}`]);
 console.log(`image built in ${((Date.now() - t0) / 60000).toFixed(1)} min`);
+// The WAT text (original + patched) is ~3 GB per build; keep it only on request.
+if (!argv.includes("--keep-wat")) {
+  for (const f of readdirSync(out)) if (f.endsWith(".wat") || f.startsWith("svm_err_")) rmSync(join(out, f));
+}
 for (const f of readdirSync(out)) console.log(`  ${f}  ${(statSync(join(out, f)).size / 1048576).toFixed(1)} MiB`);

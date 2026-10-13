@@ -6,8 +6,9 @@
 //      with hand-written WAT (linear-memory loads/stores, bulk copies);
 //   2. injects extra module fields (the "nmem" linear memory and its export).
 // The spec file is named by WATPATCH_SPEC (default: intrinsics.wat next to
-// this script). Every @replace-body target must be found, or the build fails:
-// a silently unpatched intrinsic would run its placeholder body instead.
+// this script). Functions named by @require must exist in the WAT, or the
+// build fails (exit 3): a patch that silently found nothing would leave the
+// image subtly wrong (e.g. JLS boxing caches bypassed).
 //
 // Spec format:
 //   ;; @replace-body $_WasmIntrinsics_putFloat___JF_V
@@ -16,6 +17,7 @@
 //   ;; @module
 //   (memory $nmem 16 65536)
 //   ;; @end
+//   ;; @require $func.box.Int
 import { createReadStream, createWriteStream, readFileSync, appendFileSync, existsSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { spawnSync } from "node:child_process";
@@ -38,14 +40,18 @@ function realWasmAs() {
 function parseSpec(path) {
   const replace = new Map();
   const moduleFields = [];
+  const required = new Set();
   let mode = null;
   let name = null;
   let buf = [];
   for (const line of readFileSync(path, "utf8").split(/\r?\n/)) {
-    const directive = line.match(/^;;\s*@(replace-body|module|end)\s*(\S*)/);
+    const directive = line.match(/^;;\s*@(replace-body|module|require|end)\s*(\S*)/);
     if (directive) {
       const [, kind, arg] = directive;
-      if (kind === "end") {
+      if (kind === "require") {
+        if (mode) throw new Error(`watpatch: @require inside @${mode} block in ${path}`);
+        required.add(arg);
+      } else if (kind === "end") {
         if (mode === "replace-body") replace.set(name, buf.join("\n"));
         else if (mode === "module") moduleFields.push(buf.join("\n"));
         mode = null;
@@ -60,7 +66,7 @@ function parseSpec(path) {
     if (mode) buf.push(line);
   }
   if (mode) throw new Error(`watpatch: unterminated @${mode} block in ${path}`);
-  return { replace, moduleFields };
+  return { replace, moduleFields, required };
 }
 
 async function patch(input, output, spec) {
@@ -70,6 +76,7 @@ async function patch(input, output, spec) {
     return null;
   };
   const found = new Set();
+  const requiredFound = new Set();
   const rl = createInterface({ input: createReadStream(input), crlfDelay: Infinity });
   let skipping = false;
   let held = null;
@@ -84,6 +91,7 @@ async function patch(input, output, spec) {
     }
     if (line.startsWith("  (func $")) {
       const fname = line.slice(8).split(/[\s(]/, 1)[0];
+      if (spec.required.has(fname)) requiredFound.add(fname);
       const body = spec.replace.get(fname);
       if (body !== undefined) {
         found.add(fname);
@@ -114,7 +122,8 @@ async function patch(input, output, spec) {
   const owner = (fn) => fn.slice(0, fn.indexOf("_", 2));
   const usedOwners = new Set([...found].map(owner));
   const missing = [...spec.replace.keys()].filter((k) => !found.has(k) && usedOwners.has(owner(k)));
-  return { found: found.size, missing };
+  const missingRequired = [...spec.required].filter((k) => !requiredFound.has(k));
+  return { found: found.size, missing, missingRequired };
 }
 
 const watIndex = args.findIndex((a) => a.endsWith(".wat"));
@@ -126,13 +135,19 @@ if (watIndex >= 0) {
   const input = args[watIndex];
   const output = input.replace(/\.wat$/, ".patched.wat");
   const t0 = Date.now();
-  const { found, missing } = await patch(input, output, spec);
-  log(`[watpatch] ${input}: replaced ${found} bodies, injected ${spec.moduleFields.length} fields in ${Date.now() - t0} ms`);
-  if (missing.length) {
-    const msg = `watpatch: intrinsic functions not found in WAT (inlined or renamed?): ${missing.join(", ")}`;
-    log(msg);
+  const { found, missing, missingRequired } = await patch(input, output, spec);
+  if (missingRequired.length) {
+    const msg = `watpatch: required functions missing from WAT: ${missingRequired.join(", ")}`;
     console.error(msg);
     process.exit(3);
+  }
+  log(`[watpatch] ${input}: replaced ${found} bodies, injected ${spec.moduleFields.length} fields in ${Date.now() - t0} ms`);
+  if (missing.length) {
+    // Usually just unreachable (never called, so never compiled). An intrinsic that was
+    // inlined instead would run its placeholder body; Nmem.selfCheck() at boot catches that.
+    const msg = `watpatch: note: intrinsics not present in WAT (unreachable?): ${missing.join(", ")}`;
+    log(msg);
+    console.error(msg);
   }
   forwarded = [...args];
   forwarded[watIndex] = output;

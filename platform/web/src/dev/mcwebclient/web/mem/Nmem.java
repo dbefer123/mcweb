@@ -113,6 +113,40 @@ public final class Nmem {
         return (int) sink + deltaPages;
     }
 
+    /**
+     * Verifies at startup that the intrinsics were patched. An unpatched placeholder
+     * would not round-trip values through memory, so this fails loudly instead of the
+     * game corrupting data later.
+     */
+    public static void selfCheck(long scratch) {
+        putInt(scratch, 0x12345678);
+        putLong(scratch + 8, 0x1122334455667788L);
+        putShort(scratch + 16, (short) -2);
+        putByte(scratch + 18, (byte) -3);
+        putFloat(scratch + 20, 1.5f);
+        putDouble(scratch + 24, -2.25);
+        byte[] bytes = {9, 8, 7, 6, 5};
+        copyFromBytes(bytes, 0, scratch + 32, bytes.length);
+        copy(scratch + 32, scratch + 40, bytes.length);
+        byte[] back = new byte[bytes.length];
+        copyToBytes(scratch + 40, back, 0, back.length);
+        fill(scratch + 48, 0x7f, 4);
+        boolean ok = getInt(scratch) == 0x12345678
+                && getLong(scratch + 8) == 0x1122334455667788L
+                && getShort(scratch + 16) == (short) -2
+                && getByte(scratch + 18) == (byte) -3
+                && getInt(scratch + 20) == Float.floatToRawIntBits(1.5f)
+                && getFloat(scratch + 20) == 1.5f
+                && getLong(scratch + 24) == Double.doubleToRawLongBits(-2.25)
+                && getDouble(scratch + 24) == -2.25
+                && java.util.Arrays.equals(bytes, back)
+                && getInt(scratch + 48) == 0x7f7f7f7f
+                && pages() > 0;
+        if (!ok) {
+            throw new IllegalStateException("nmem intrinsics are not patched (see tools/watpatch)");
+        }
+    }
+
     // ---- Typed array copies (Java loops; hot paths use the byte intrinsics above) ----
 
     public static void copyFromInts(int[] src, int srcOff, long dst, int count) {

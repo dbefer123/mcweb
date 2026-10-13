@@ -1,0 +1,24 @@
+{
+  "reflection": [
+    {
+      "condition": {"typeReached": "joptsimple.internal.Reflection"},
+      "type": "java.io.File",
+      "methods": [{"name": "<init>", "parameterTypes": ["java.lang.String"]}]
+    },
+    {
+      "condition": {"typeReached": "joptsimple.internal.Reflection"},
+      "type": "java.lang.Integer",
+      "methods": [{"name": "valueOf", "parameterTypes": ["java.lang.String"]}]
+    },
+    {
+      "condition": {"typeReached": "joptsimple.internal.Reflection"},
+      "type": "java.lang.Long",
+      "methods": [{"name": "valueOf", "parameterTypes": ["java.lang.String"]}]
+    },
+    {
+      "condition": {"typeReached": "joptsimple.internal.Reflection"},
+      "type": "java.lang.Double",
+      "methods": [{"name": "valueOf", "parameterTypes": ["java.lang.String"]}]
+    }
+  ]
+}

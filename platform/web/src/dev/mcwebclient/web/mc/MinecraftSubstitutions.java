@@ -65,12 +65,72 @@ final class Target_net_minecraft_client_Minecraft {
     }
 }
 
+/**
+ * Minecraft pre-loads LWJGL's native libraries (FreeType, OpenGL, STB, SDL, OpenAL, Vulkan)
+ * at startup to fail early. In the browser there are none: each binding that is used is
+ * substituted instead (see sdl/, mem/), so this is a no-op.
+ */
+@TargetClass(com.mojang.blaze3d.platform.NativeLibrariesBootstrap.class)
+final class Target_com_mojang_blaze3d_platform_NativeLibrariesBootstrap {
+    @Substitute
+    public static void loadLibraries() {
+    }
+
+    @Substitute
+    public static boolean isVulkanLoaderAvailable() {
+        return false;
+    }
+}
+
+/** System reports query OSHI (native hardware probes), which can't work in a browser. */
+@TargetClass(net.minecraft.SystemReport.class)
+final class Target_net_minecraft_SystemReport {
+    @Alias
+    public native void setDetail(String key, String value);
+
+    @Substitute
+    private void putHardware(oshi.SystemInfo systemInfo) {
+        setDetail("Platform", "Web browser (WebAssembly)");
+    }
+
+    @Substitute
+    private void putSoftware(oshi.SystemInfo systemInfo) {
+    }
+}
+
 @TargetClass(net.minecraft.client.PreferredGraphicsApi.class)
 final class Target_net_minecraft_client_PreferredGraphicsApi {
     /** Only the browser backend exists; OpenGL/Vulkan drop out of the image entirely. */
     @Substitute
     public GpuBackend[] getBackendsToTry() {
         return new GpuBackend[] {new WebGpuBackend()};
+    }
+}
+
+/**
+ * The original ends by initializing VulkanFeatureSets, whose static fields describe
+ * Vulkan feature structs by probing LWJGL classes reflectively. Only the Vulkan backend
+ * reads them, so that step is left out (no mixins are baked into this method).
+ */
+@TargetClass(net.minecraft.client.ClientBootstrap.class)
+final class Target_net_minecraft_client_ClientBootstrap {
+    @Alias private static volatile boolean isBootstrapped;
+
+    @Substitute
+    public static void bootstrap() {
+        if (!isBootstrapped) {
+            isBootstrapped = true;
+            net.minecraft.client.renderer.item.ItemModels.bootstrap();
+            net.minecraft.client.renderer.special.SpecialModelRenderers.bootstrap();
+            net.minecraft.client.color.item.ItemTintSources.bootstrap();
+            net.minecraft.client.renderer.item.properties.select.SelectItemModelProperties.bootstrap();
+            net.minecraft.client.renderer.item.properties.conditional.ConditionalItemModelProperties.bootstrap();
+            net.minecraft.client.renderer.item.properties.numeric.RangeSelectItemModelProperties.bootstrap();
+            net.minecraft.client.renderer.texture.atlas.SpriteSources.bootstrap();
+            net.minecraft.client.gui.screens.dialog.DialogScreens.bootstrap();
+            net.minecraft.client.gui.screens.dialog.input.InputControlHandlers.bootstrap();
+            net.minecraft.client.gui.screens.dialog.body.DialogBodyHandlers.bootstrap();
+        }
     }
 }
 

@@ -109,3 +109,35 @@
         (local.set $i (i32.add (local.get $i) (i32.const 1)))
         (br $next)))
 ;; @end
+
+;; ---- JLS boxing caches (see platform/web/.../jdk/BoxCache.java) ----
+;; Web Image's WasmGC box functions always allocate; route the cached kinds through
+;; BoxCache so Integer/Short/Long(-128..127), Byte and Character(0..127) keep identity.
+
+;; @replace-body $func.box.Int
+    (ref.as_non_null (call $_BoxCache_boxInt___I_Integer (local.get $p0)))
+;; @end
+;; @replace-body $func.box.Short
+    (ref.as_non_null (call $_BoxCache_boxShort___S_Short (local.get $p0)))
+;; @end
+;; @replace-body $func.box.Long
+    (ref.as_non_null (call $_BoxCache_boxLong___J_Long (local.get $p0)))
+;; @end
+;; @replace-body $func.box.Byte
+    (ref.as_non_null (call $_BoxCache_boxByte___B_Byte (local.get $p0)))
+;; @end
+;; @replace-body $func.box.Char
+    (ref.as_non_null (call $_BoxCache_boxChar___C_Character (local.get $p0)))
+;; @end
+
+;; The box patches above are load-bearing: fail the build if their targets vanish.
+;; @require $func.box.Int
+;; @require $func.box.Short
+;; @require $func.box.Long
+;; @require $func.box.Byte
+;; @require $func.box.Char
+;; @require $_BoxCache_boxInt___I_Integer
+;; @require $_BoxCache_boxShort___S_Short
+;; @require $_BoxCache_boxLong___J_Long
+;; @require $_BoxCache_boxByte___B_Byte
+;; @require $_BoxCache_boxChar___C_Character

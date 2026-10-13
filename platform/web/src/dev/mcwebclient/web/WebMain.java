@@ -17,6 +17,10 @@ public final class WebMain {
 
     public static void main(String[] args) throws Exception {
         WebJs.stage("boot");
+        // Also keeps the boxing helpers compiled for tools/watpatch (see BoxCache).
+        if (!dev.mcwebclient.web.jdk.BoxCache.selfCheck()) {
+            throw new IllegalStateException("boxing caches broken: tools/watpatch box patches missing?");
+        }
         WebRuntime.boot();
         Path gameRoot = WebRuntime.ROOT.resolve("minecraft-root");
         Files.createDirectories(gameRoot);
@@ -40,4 +44,5 @@ public final class WebMain {
             WebJs.log("[web] main loop handed to the browser");
         }
     }
+
 }

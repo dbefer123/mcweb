@@ -35,17 +35,42 @@ public final class WebRuntime {
         // checks). The image behaves like 64-bit Linux: Unix paths, LP64 layouts.
         System.setProperty("os.name", "Linux");
         System.setProperty("os.arch", "amd64");
+        setIfMissing("os.version", "6.0-browser");
+        // Fabric registers a built-in "java" mod from these; Minecraft reports them.
+        setIfMissing("java.home", "/root/jdk");
+        setIfMissing("java.version", "25.0.4");
+        setIfMissing("java.specification.version", "25");
+        setIfMissing("java.vm.name", "GraalVM Web Image");
+        setIfMissing("java.vm.vendor", "Oracle Corporation");
+        setIfMissing("java.vm.info", "WasmGC");
+        setIfMissing("java.vendor", "Oracle Corporation");
+        setIfMissing("java.class.path", "");
+        setIfMissing("java.library.path", "");
+        setIfMissing("file.encoding", "UTF-8");
+        setIfMissing("sun.jnu.encoding", "UTF-8");
+        setIfMissing("minecraft.launcher.brand", "mcweb");
         System.setProperty("user.home", ROOT.toString());
         System.setProperty("java.awt.headless", "true");
         System.setProperty("log4j2.formatMsgNoLookups", "true");
+        long scratch = dev.mcwebclient.web.mem.NativeHeap.malloc(64);
+        dev.mcwebclient.web.mem.Nmem.selfCheck(scratch);
+        dev.mcwebclient.web.mem.NativeHeap.free(scratch);
         Files.createDirectories(GAME_DIR);
         Files.createDirectories(ASSETS_DIR);
         Files.createDirectories(LOADER_DIR);
+        Files.createDirectories(Path.of(System.getProperty("java.home")));
         int files = unpackEmbedded();
         try (var s = Files.list(LOADER_DIR)) {
             fabricLoaderJar = s.filter(p -> p.getFileName().toString().startsWith("fabric-loader")).findFirst().orElse(null);
         }
         WebJs.log("[web] boot: unpacked " + files + " embedded files; loader jar " + fabricLoaderJar);
+    }
+
+    private static void setIfMissing(String key, String value) {
+        String current = System.getProperty(key);
+        if (current == null || current.isEmpty()) {
+            System.setProperty(key, value);
+        }
     }
 
     public static Path fabricLoaderJar() {

@@ -1,29 +1,30 @@
 package dev.mcwebclient.web.exec;
 
 import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.PriorityQueue;
-
-import dev.mcwebclient.web.WebJs;
+import java.util.concurrent.locks.LockSupport;
 
 /**
- * The image runs on one thread. Work that would run on executor or helper threads is
- * queued here and run cooperatively:
- * <ul>
- *   <li>every frame, for a time budget ({@link #pumpFrame});</li>
- *   <li>whenever code blocks (LockSupport.park → {@link #onPark}), so a thread waiting
- *       for a future lets the task that completes it run.</li>
- * </ul>
- * A park that finds nothing to run returns immediately (a legal spurious wake-up); a
- * caller that keeps parking with no work anywhere for too long is a deadlock and fails
- * loudly instead of freezing the tab.
+ * Executor and timer work on green threads ({@link CoThreads}). Tasks from thread pools
+ * (Minecraft's worker executors, ThreadPoolExecutor, ScheduledThreadPoolExecutor) are
+ * queued here and run by worker coroutines, which yield to the browser between tasks once
+ * their time slice is used up.
+ *
+ * <p>A new worker is started only when no existing one can take the task: all are busy and
+ * blocked inside their task (parked on a future, say). Workers that block while tasks are
+ * queued hand the queue on ({@link #onThreadBlocking}). That keeps "task waits for a task
+ * queued behind it" from deadlocking, without a stack per queued task.
  */
 public final class WebScheduler {
     private static final ArrayDeque<Runnable> QUEUE = new ArrayDeque<>();
     private static final PriorityQueue<Timed> TIMED = new PriorityQueue<>();
-    private static final long DEADLOCK_NANOS = 20_000_000_000L;
+    private static final ArrayDeque<Thread> IDLE = new ArrayDeque<>();
+    private static final List<Thread> WORKERS = new ArrayList<>();
+    private static final int MAX_WORKERS = 64;
 
-    private static int depth;
-    private static long idleParkSince = -1;
+    private static Thread timer;
     private static long seq;
 
     private record Timed(long due, long seq, Runnable task) implements Comparable<Timed> {
@@ -38,73 +39,93 @@ public final class WebScheduler {
 
     public static void submit(Runnable task) {
         QUEUE.add(task);
+        wakeWorker();
     }
 
     public static void schedule(Runnable task, long delayNanos) {
         TIMED.add(new Timed(System.nanoTime() + Math.max(0, delayNanos), seq++, task));
+        if (timer == null) {
+            timer = new Thread(WebScheduler::timerLoop, "Web scheduler timer");
+            timer.setDaemon(true);
+            timer.start();
+        } else {
+            LockSupport.unpark(timer); // re-evaluate the earliest deadline
+        }
     }
 
+    /** Queued (not yet started) tasks, including delayed ones. */
     public static int pending() {
         return QUEUE.size() + TIMED.size();
     }
 
-    /** Runs one ready task; returns false if none was ready. */
-    public static boolean runOne() {
-        promoteDueTimers();
-        Runnable task = QUEUE.poll();
-        if (task == null) {
-            return false;
+    /** Waits up to {@code timeoutNanos} for the run queue to empty (executor shutdown). */
+    public static boolean awaitQueueEmpty(long timeoutNanos) {
+        long end = System.nanoTime() + timeoutNanos;
+        while (!QUEUE.isEmpty() && System.nanoTime() < end) {
+            CoThreads.sleep(1_000_000L);
         }
-        depth++;
-        try {
-            task.run();
-        } catch (Throwable t) {
-            WebJs.log("[sched] task failed: " + t);
-            t.printStackTrace();
-        } finally {
-            depth--;
-        }
-        return true;
+        return QUEUE.isEmpty();
     }
 
-    /** Runs queued work until the budget is spent or the queue is empty. */
-    public static void pumpFrame(long budgetNanos) {
-        long end = System.nanoTime() + budgetNanos;
-        while (System.nanoTime() < end && runOne()) {
-            // keep going
+    /**
+     * Called when a thread is about to block (park, wait, sleep). A worker blocking inside its
+     * task could wait for a task queued behind it: hand the queue to another worker.
+     */
+    static void onThreadBlocking(Thread t) {
+        if (!QUEUE.isEmpty() && WORKERS.contains(t)) {
+            wakeWorker();
         }
     }
 
-    /** Runs everything currently runnable (used where callers must observe completion). */
-    public static void drain() {
-        while (runOne()) {
-            // keep going
-        }
-    }
-
-    /** Hook for LockSupport.park: make progress elsewhere, then return. */
-    public static void onPark(boolean absolute, long time) {
-        if (runOne()) {
-            idleParkSince = -1;
+    private static void wakeWorker() {
+        Thread idle = IDLE.poll();
+        if (idle != null) {
+            LockSupport.unpark(idle);
             return;
         }
-        long now = System.nanoTime();
-        if (idleParkSince < 0) {
-            idleParkSince = now;
-        } else if (now - idleParkSince > DEADLOCK_NANOS) {
-            idleParkSince = -1;
-            throw new IllegalStateException("single-threaded deadlock: parked for "
-                    + DEADLOCK_NANOS / 1_000_000_000L + "s with no runnable work (depth " + depth + ")");
+        for (Thread w : WORKERS) {
+            if (!CoThreads.isBlocked(w)) {
+                return; // a running (or yielding) worker takes the task when it gets there
+            }
+        }
+        if (WORKERS.size() < MAX_WORKERS) {
+            Thread w = new Thread(WebScheduler::workerLoop, "Worker-" + (WORKERS.size() + 1));
+            w.setDaemon(true);
+            WORKERS.add(w);
+            w.start();
         }
     }
 
-    private static void promoteDueTimers() {
-        if (TIMED.isEmpty()) {
-            return;
+    private static void workerLoop() {
+        Thread me = Thread.currentThread();
+        while (true) {
+            Runnable task = QUEUE.poll();
+            if (task == null) {
+                IDLE.add(me);
+                LockSupport.park(WebScheduler.class);
+                IDLE.remove(me); // spurious wake-up: not taken from IDLE by wakeWorker
+                continue;
+            }
+            try {
+                task.run();
+            } catch (Throwable t) {
+                me.getUncaughtExceptionHandler().uncaughtException(me, t);
+            }
+            CoThreads.maybeYield();
         }
-        long now = System.nanoTime();
-        while (!TIMED.isEmpty() && TIMED.peek().due() <= now) {
-            QUEUE.add(TIMED.poll().task());
+    }
+
+    private static void timerLoop() {
+        while (true) {
+            long now = System.nanoTime();
+            while (!TIMED.isEmpty() && TIMED.peek().due() <= now) {
+                submit(TIMED.poll().task());
+            }
+            if (TIMED.isEmpty()) {
+                LockSupport.park(WebScheduler.class);
+            } else {
+                LockSupport.parkNanos(WebScheduler.class, TIMED.peek().due() - now);
+            }
         }
     }
 }

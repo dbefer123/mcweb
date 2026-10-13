@@ -2,7 +2,8 @@
 
 Plan: `C:\Users\Cade N\.claude\plans\all-right-so-here-wise-meerkat.md` (approved 2026-10-12).
 Goal: Minecraft 26.3 + the Prism instance's Fabric mods, compiled to WebAssembly (GraalVM Web Image),
-rendered with WebGPU, singleplayer in a Worker, multiplayer through a WebSocket↔TCP relay.
+rendered with WebGPU, singleplayer (integrated server as a green thread, see Phase 4),
+multiplayer through a WebSocket↔TCP relay.
 
 ## Status
 
@@ -10,9 +11,9 @@ rendered with WebGPU, singleplayer in a Worker, multiplayer through a WebSocket�
 |---|---|
 | 0. Toolchain spike | **Done: go** (2026-10-12) |
 | 1. Inputs + Fabric baker + desktop checkpoint | **Done** (2026-10-12) — local-server join deferred to Phase 5 |
-| 2. Headless image | **Nearly done**: boots through Fabric, Bootstrap, all mod entrypoints and the Minecraft constructor up to graphics-backend creation |
-| 3. Rendering + input | **In progress**: glslang→wasm done, SPIR-V reflection + SPIR-V→WGSL translator done (393/393 corpus pipelines translate; 392 validated in Chrome, last one was a test-page bug), WebGPU device backend next |
-| 4. Singleplayer | — |
+| 2. Headless image | **Done** (2026-10-13) |
+| 3. Rendering + input | **Done** (2026-10-13): title screen, menus, options, Sodium video settings; clicks, keys, text |
+| 4. Singleplayer | **In progress**: JSPI green threads (Java threads as coroutines) to run the integrated server |
 | 5. Multiplayer | — |
 | 6. Microsoft sign-in | — |
 | 7. Completeness | — |
@@ -317,4 +318,45 @@ stub). Further fixes on the way to the title screen:
   TODO (Phase 7): text that arrives without keydown events (IME composition, mobile
   keyboards, `insertText`) needs a hidden input element / `beforeinput` handling.
 
-Next: Phase 4, singleplayer.
+## Phase 4: singleplayer (in progress)
+
+- Create World screen opens (datapacks/world presets load: "Loaded 1866 advancements").
+  "Create New World" froze the page: `Minecraft.doWorldLoad` spins in
+  `while (!server.isReady())` rendering frames, and the integrated server's own loop
+  (`runServer`, `prepareLevels`, `waitUntilNextTick`) blocks the same way. Every blocking
+  wait in Minecraft (and Netty's `syncUninterruptibly`) would need rewriting for a
+  run-to-completion runtime.
+- **Decision: green threads with JSPI** (WebAssembly.Suspending/promising; Chrome/Edge 137+,
+  this browser is Chromium 152). Spike (`spike/webimage/src/spike/Spike3.java`,
+  `spike/webimage/build-spike3.mjs`, `spike/webimage/web/spike3.html`): Web Image (WasmGC)
+  code suspends on a JS promise and resumes; a second stack started from Java via a
+  promising proxy call interleaves with main (`c0m0c1m1c2m2`); exceptions across suspension
+  work; the page stays responsive.
+- Design (`exec/CoThreads`): every Thread is a coroutine on its own stack; `park`/`unpark`,
+  `Thread.sleep`, `yield`, `Object.wait/notify`, `isAlive`/`join` suspend/resume;
+  `Thread.currentThread()` is SVM's current-thread slot (`PlatformThreads.currentThread`),
+  set on every resume, so `isSameThread`, chunk-cache thread checks and ThreadLocals behave
+  as on the desktop. Executor tasks run on worker coroutines that yield every ~6 ms (a new
+  worker only when all are blocked). Minecraft's own `run()` loop runs on the main stack;
+  `RenderSystem.pollEvents` (top of each iteration) waits for the next animation frame.
+  The integrated server and Netty's local event loops run unmodified. Monitors stay no-ops.
+  Glue patches in build-image.mjs: imports hook, promising `main`, promising proxy calls.
+- First green-thread runs: the image needs `--add-exports` for SVM's thread-local package
+  (CoThreads sets the current-thread slot). Then startup stalled after the sound engine:
+  a worker blocked inside a task (RetryableFetch's URL supplier joins another fetch queued
+  behind it) and no other worker took the queue → workers that block (park/wait/sleep)
+  now hand the queue on, and only non-blocked workers count as available. A watchdog thread
+  logs threads stuck >10 s in an untimed park/wait with the park site; setting
+  `mcweb.co.dumpRequested = true` in the console dumps all threads.
+- Frames: a visible page in a minimized/occluded window also gets no animation frames
+  (the main loop sat in awaitFrame for 40 s) → the ticker delivers a frame whenever none
+  arrived for 100 ms, hidden or not.
+- **Integrated server runs** (2026-10-13): Create New World → `[Server thread]` starts,
+  selects the spawn, prepares the spawn area and saves chunks, while the page keeps
+  rendering at ~30 fps. The client then failed to open the in-memory connection: Netty
+  creates `LocalServerChannel` reflectively → reflection metadata for the Netty channel
+  constructors.
+- **Deviation from the plan:** the integrated server runs as a green thread next to the
+  client, not in a Worker. IntegratedServer is tied to the client's `Minecraft` object, and
+  WasmGC heaps can't be shared between Workers (a Worker server would be a second image
+  instance with serialized packets). Revisit as a Phase 8 performance option.

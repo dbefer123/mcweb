@@ -4,7 +4,7 @@ import java.util.List;
 import java.util.concurrent.AbstractExecutorService;
 import java.util.concurrent.TimeUnit;
 
-/** An ExecutorService whose tasks run on the cooperative {@link WebScheduler}. */
+/** An ExecutorService whose tasks run on {@link WebScheduler}'s worker coroutines. */
 public final class WebExecutorService extends AbstractExecutorService {
     private final String name;
     private boolean shutdown;
@@ -44,8 +44,7 @@ public final class WebExecutorService extends AbstractExecutorService {
 
     @Override
     public boolean awaitTermination(long timeout, TimeUnit unit) {
-        WebScheduler.drain();
-        return true;
+        return WebScheduler.awaitQueueEmpty(unit.toNanos(timeout));
     }
 
     @Override

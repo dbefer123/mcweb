@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>JSPI probe</title>
+<style>
+  body { font: 13px/1.5 ui-monospace, monospace; background: #111; color: #ddd; margin: 16px; }
+  #log { white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<div id="log"></div>
+<script>
+  const logEl = document.getElementById("log");
+  globalThis.spikeLog = (msg) => { logEl.textContent += msg + "\n"; console.log(msg); };
+  // Page responsiveness while Java is "blocked": this interval must keep firing.
+  let ticks = 0;
+  const interval = setInterval(() => { ticks++; }, 20);
+  setTimeout(() => { clearInterval(interval); spikeLog(`[page] interval ticks in 1.2 s: ${ticks}`); }, 1200);
+  // Imports that may suspend: every @JS body whose import name mentions suspendFor.
+  globalThis.mcwebPatchImports = (imports) => {
+    for (const [name, fn] of Object.entries(imports.jsbody)) {
+      if (name.includes("suspendFor")) {
+        imports.jsbody[name] = new WebAssembly.Suspending(fn);
+        spikeLog(`[page] Suspending: ${name}`);
+      }
+    }
+  };
+  globalThis.spikeStart = (runnable) => {
+    globalThis.__mcwebPromisingCall = true;
+    const p = runnable.run();
+    spikeLog(`[page] coroutine started, run() returned ${Object.prototype.toString.call(p)}`);
+    p.then(() => spikeLog("[page] coroutine promise resolved"), (e) => spikeLog(`[page] coroutine failed: ${e}`));
+  };
+  spikeLog(`[page] JSPI available: ${typeof WebAssembly.Suspending === "function" && typeof WebAssembly.promising === "function"}`);
+</script>
+<script src="s3/spike3.js"></script>
+</body>
+</html>

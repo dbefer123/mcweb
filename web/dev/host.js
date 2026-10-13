@@ -40,72 +40,135 @@ Error.stackTraceLimit = 200;
     if (follow.checked) logEl.scrollTop = logEl.scrollHeight;
   }
 
-  // Frame timing: `gap` is the time between animation frames, `cb` the time spent in the
-  // game's frame callback. mcweb.frameStats() returns the recent frames.
-  const FRAME_HISTORY = 240;
-  const frameLog = [];
-  let frameCallback = null;
-  let frames = 0;
-  let cbTotal = 0;
-  let lastFpsAt = performance.now();
-  let lastFrameAt = 0;
-  function loop(now) {
-    requestAnimationFrame(loop);
-    runFrame(now);
-  }
+  // ---- Green threads (JSPI; platform/web/.../exec/CoThreads.java) ----
+  // Every Java thread runs on its own WebAssembly stack. The build makes main a promising
+  // call, and patchImports below wraps the image's CoThreads.suspend* imports in
+  // WebAssembly.Suspending: they return promises here, and the calling Java thread waits
+  // for them while the browser (and other Java threads) run.
+  const parked = new Map(); // thread key -> { resolve, timer }
+  const yieldQueue = [];
+  const yieldChannel = new MessageChannel(); // a yield resumes after pending tasks, unthrottled
+  yieldChannel.port1.onmessage = () => yieldQueue.shift()?.(0);
+  const frameWaiters = [];
 
-  // A hidden page gets no animation frames, which would freeze loading and let server
-  // connections time out. While hidden, a worker timer (not throttled like the page's
-  // timers) drives the game at a lower rate instead.
-  const HIDDEN_FRAME_MS = 33;
-  const ticker = new Worker(URL.createObjectURL(new Blob(
-    [`setInterval(() => postMessage(0), ${HIDDEN_FRAME_MS});`], { type: "text/javascript" })));
-  let lastFrameEnd = 0;
-  ticker.onmessage = () => {
-    // Ticks that queued up behind a long frame are dropped, leaving the thread some air.
-    const now = performance.now();
-    if (document.hidden && now - lastFrameEnd >= HIDDEN_FRAME_MS / 4) {
-      runFrame(now);
-      lastFrameEnd = performance.now();
-    }
+  const co = {
+    /** Runs runnable.run() on a new stack (promising call, see build-image.mjs). */
+    start(runnable) {
+      globalThis.__mcwebPromisingCall = true;
+      let done;
+      try {
+        done = runnable.run();
+      } finally {
+        globalThis.__mcwebPromisingCall = false;
+      }
+      Promise.resolve(done).catch((e) => append(`[co] thread failed: ${e?.stack ?? e}`));
+    },
+    /** LockSupport.park / Object.wait: until wake(key) (→ 1) or the timeout (→ 0; ms < 0: none). */
+    park(key, ms) {
+      return new Promise((resolve) => {
+        const waiter = { resolve, timer: 0 };
+        parked.set(key, waiter);
+        if (ms >= 0) {
+          waiter.timer = setTimeout(() => {
+            if (parked.get(key) === waiter) {
+              parked.delete(key);
+              resolve(0);
+            }
+          }, ms);
+        }
+      });
+    },
+    wake(key) {
+      const waiter = parked.get(key);
+      if (!waiter) return;
+      parked.delete(key);
+      clearTimeout(waiter.timer);
+      waiter.resolve(1);
+    },
+    sleep(ms) {
+      return new Promise((resolve) => setTimeout(() => resolve(0), ms));
+    },
+    yieldNow() {
+      return new Promise((resolve) => {
+        yieldQueue.push(resolve);
+        yieldChannel.port2.postMessage(0);
+      });
+    },
+    /** The game loop's frame boundary: resolves at the next animation frame. */
+    frame() {
+      if (frameStart) gameMs = performance.now() - frameStart;
+      return new Promise((resolve) => frameWaiters.push(resolve));
+    },
   };
 
-  function runFrame(now) {
-    if (frameCallback) {
-      const start = performance.now();
-      try {
-        frameCallback();
-      } finally {
-        const cb = performance.now() - start;
-        frameLog.push({ at: Math.round(now), gap: lastFrameAt ? Math.round(now - lastFrameAt) : 0, cb: Math.round(cb) });
-        if (frameLog.length > FRAME_HISTORY) frameLog.shift();
-        lastFrameAt = now;
-        cbTotal += cb;
-        frames++;
-        if (now - lastFpsAt >= 1000) {
-          fpsEl.textContent = `${Math.round((frames * 1000) / (now - lastFpsAt))} fps, ${Math.round(cbTotal / frames)} ms/frame in game`;
-          frames = 0;
-          cbTotal = 0;
-          lastFpsAt = now;
-        }
-      }
+  // Frame delivery and timing: `gap` is the time between frames, `game` the time from a
+  // frame's start until the game loop waited for the next one (other Java threads that ran
+  // in between included). mcweb.frameStats() returns the recent frames.
+  const FRAME_HISTORY = 240;
+  const frameLog = [];
+  let frames = 0;
+  let gameTotal = 0;
+  let gameMs = 0;
+  let frameStart = 0;
+  let lastFpsAt = performance.now();
+  let lastFrameAt = 0;
+  function deliverFrame(now) {
+    if (!frameWaiters.length) return;
+    frameLog.push({ at: Math.round(now), gap: lastFrameAt ? Math.round(now - lastFrameAt) : 0, game: Math.round(gameMs) });
+    if (frameLog.length > FRAME_HISTORY) frameLog.shift();
+    lastFrameAt = now;
+    gameTotal += gameMs;
+    frames++;
+    if (now - lastFpsAt >= 1000) {
+      fpsEl.textContent = `${Math.round((frames * 1000) / (now - lastFpsAt))} fps, ${Math.round(gameTotal / frames)} ms/frame in game`;
+      frames = 0;
+      gameTotal = 0;
+      lastFpsAt = now;
     }
+    frameStart = performance.now();
+    for (const resolve of frameWaiters.splice(0)) resolve(0);
   }
+  let lastAnimationFrameAt = 0;
+  function loop(now) {
+    lastAnimationFrameAt = performance.now();
+    requestAnimationFrame(loop);
+    deliverFrame(now);
+  }
+
+  // Hidden pages, and visible ones in a minimized or occluded window, get no (or very few)
+  // animation frames, which would freeze the game loop and let server connections time
+  // out. When animation frames stop, a worker timer (not throttled like the page's
+  // timers) delivers frames at a lower rate instead.
+  const FALLBACK_FRAME_MS = 33;
+  const ticker = new Worker(URL.createObjectURL(new Blob(
+    [`setInterval(() => postMessage(0), ${FALLBACK_FRAME_MS});`], { type: "text/javascript" })));
+  ticker.onmessage = () => {
+    const now = performance.now();
+    if (document.hidden || now - lastAnimationFrameAt > 100) deliverFrame(now);
+  };
 
   globalThis.mcweb = {
     canvas: document.getElementById("game"),
+    co,
     onLog() {}, // WebJs.log also writes to console.log, which is mirrored below
     onStage(stage) {
       stageEl.textContent = stage;
       append(`[host] stage: ${stage}`);
     },
     onExit(code) {
-      frameCallback = null;
       stageEl.textContent = `exited (${code})`;
       append(`[host] game exited with code ${code}`);
     },
-    setFrameCallback(cb) {
-      frameCallback = cb;
+    /** Called by the glue before instantiation (build-image.mjs patch). */
+    patchImports(imports) {
+      let n = 0;
+      for (const [name, fn] of Object.entries(imports.jsbody)) {
+        if (name.startsWith("_CoThreads.suspend")) {
+          imports.jsbody[name] = new WebAssembly.Suspending(fn);
+          n++;
+        }
+      }
+      if (n !== 4) throw new Error(`expected 4 CoThreads.suspend* imports, found ${n}`);
     },
     frameStats() {
       return frameLog.slice();
@@ -205,6 +268,10 @@ Error.stackTraceLimit = 200;
     loadAssets().catch((e) => append(`[host] asset staging failed: ${e.message}`)),
   ])
     .finally(() => {
+      if (typeof WebAssembly.Suspending !== "function" || typeof WebAssembly.promising !== "function") {
+        append("[host] this browser lacks WebAssembly JSPI (needed for the game's threads): use Chrome or Edge 137 or newer");
+        return;
+      }
       const script = document.createElement("script");
       script.src = "image/minecraft.js";
       script.onerror = () => append("[host] could not load image/minecraft.js (build it with tools/build-image.mjs)");

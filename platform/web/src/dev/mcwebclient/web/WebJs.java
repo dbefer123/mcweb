@@ -18,10 +18,6 @@ public final class WebJs {
     @JS(value = "globalThis.mcweb?.onStage?.(stage);", args = {"stage"})
     public static native void stage(String stage);
 
-    /** Registers the per-frame callback; the host calls cb.run() from requestAnimationFrame. */
-    @JS(value = "globalThis.mcweb.setFrameCallback(() => cb.run());", args = {"cb"})
-    public static native void setFrameCallback(Runnable cb);
-
     @JS.Coerce
     @JS(value = "globalThis.mcweb?.onExit?.(code);", args = {"code"})
     public static native void exit(int code);

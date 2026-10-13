@@ -9,9 +9,7 @@ import com.oracle.svm.core.annotate.TargetClass;
 
 import dev.mcwebclient.web.exec.WebExecutorService;
 import dev.mcwebclient.web.gpu.WebGpuBackend;
-import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
 import net.minecraft.TracingExecutor;
-import net.minecraft.client.Minecraft;
 
 /**
  * Minecraft classes whose behaviour depends on real threads, a blocking main loop or
@@ -39,41 +37,35 @@ final class Target_net_minecraft_util_Util {
     }
 }
 
-@TargetClass(Minecraft.class)
-final class Target_net_minecraft_client_Minecraft {
-    @Alias Thread gameThread;
-    @Alias volatile boolean running;
-    @Alias SDLEventHandler sdlEventHandler;
-
-    @Alias
-    native void runTick(boolean advanceGameTime);
-
-    /**
-     * The desktop loop never returns; the browser needs control back every frame.
-     * This starts the frame pump and unwinds Main.main with {@link MainLoopDetached}.
-     *
-     * <p>Baked mixins in the original: fabric-lifecycle-events-v1 fires
-     * ClientLifecycleEvents.CLIENT_STARTED at the head of run(); fired here instead.</p>
-     */
-    @Substitute
-    public void run() {
-        gameThread = Thread.currentThread();
-        Minecraft self = (Minecraft) (Object) this;
-        ClientLifecycleEvents.CLIENT_STARTED.invoker().onClientStarted(self);
-        FramePump.start(self);
-        throw new MainLoopDetached();
-    }
-}
-
 /**
- * The desktop limiter sleeps/spins until the next frame is due. The browser already
- * paces frames with requestAnimationFrame; the frame pump skips callbacks instead.
+ * The desktop limiter sleeps/spins until the next frame is due. Frames are paced by the
+ * browser instead ({@link GameLoop#awaitFrame}), which applies the cap recorded here.
  */
 @TargetClass(net.minecraft.client.FramerateLimiter.class)
 final class Target_net_minecraft_client_FramerateLimiter {
     @Substitute
     public static void limitDisplayFPS(int framerateLimit) {
-        FramePump.setFramerateLimit(framerateLimit);
+        GameLoop.setFramerateLimit(framerateLimit);
+    }
+}
+
+/**
+ * Minecraft's own loop (Minecraft.run) runs on the main green thread. The top of each
+ * iteration (pollEvents) is the frame boundary: the previous frame has been submitted and
+ * presented, so the loop waits there for the browser's next animation frame.
+ */
+@TargetClass(com.mojang.blaze3d.systems.RenderSystem.class)
+final class Target_com_mojang_blaze3d_systems_RenderSystem {
+    @Alias private static java.util.concurrent.atomic.AtomicLong pollEventsWaitStart;
+    @Alias private static java.util.concurrent.atomic.AtomicBoolean pollingEvents;
+
+    @Substitute
+    public static void pollEvents(SDLEventHandler eventHandler) {
+        GameLoop.awaitFrame();
+        pollEventsWaitStart.set(net.minecraft.util.Util.getMillis());
+        pollingEvents.set(true);
+        eventHandler.pollEvents();
+        pollingEvents.set(false);
     }
 }
 

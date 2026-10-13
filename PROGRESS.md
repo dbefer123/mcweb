@@ -303,4 +303,18 @@ stub). Further fixes on the way to the title screen:
   per frame while loading).
 - `log4j-api` users get its SimpleProvider (console) instead of no provider.
 
-Next: title screen.
+- **Title screen** renders in the browser (2026-10-13): panorama, logo, splash, buttons,
+  "Minecraft 26.3 (Modded)". Idle cost ~1 ms/frame in the game.
+- Input: clicks work. A press can arrive without a preceding mousemove (taps, synthetic
+  clicks) and Minecraft clicks at the last motion position → input.js reports a motion
+  first when the press position differs.
+- Options screen: the menu blur's uniform buffer is 12 bytes; WebGPU binds uniforms in
+  16-byte steps → GPU buffers are rounded up to 16 bytes and uniform bindings padded to the
+  pipeline's minimum.
+
+- Options screen (with blurred panorama) and Sodium 0.9.2 video settings (Reese's Sodium
+  Options 2.2.5) render and work; keys (Escape) and typed text (search box) work.
+  TODO (Phase 7): text that arrives without keydown events (IME composition, mobile
+  keyboards, `insertText`) needs a hidden input element / `beforeinput` handling.
+
+Next: Phase 4, singleplayer.

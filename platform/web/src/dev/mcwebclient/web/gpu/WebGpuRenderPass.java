@@ -195,7 +195,7 @@ final class WebGpuRenderPass implements RenderPassBackend {
                     GpuBufferSlice s = (GpuBufferSlice) value;
                     WebGpuBuffer b = (WebGpuBuffer) s.buffer();
                     long size = Math.max(s.length(), pipeline.minBindingSize[i]);
-                    size = Math.min((size + 3) & ~3L, ((b.size() + 3) & ~3L) - s.offset());
+                    size = Math.min((size + 3) & ~3L, b.gpuSize - s.offset());
                     e[n++] = new int[] {2 * i, 0, b.id, (int) s.offset(), (int) size};
                 }
                 case TEXEL_BUFFER -> {

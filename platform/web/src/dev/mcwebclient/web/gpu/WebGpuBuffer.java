@@ -20,6 +20,12 @@ import org.lwjgl.system.MemoryUtil;
  */
 class WebGpuBuffer extends BaseGpuBuffer {
     final int id;
+    /**
+     * Size of the WebGPU buffer: rounded up to 16 bytes, because WebGPU sizes uniform
+     * bindings in 16-byte steps (a 12-byte uniform struct binds 16 bytes) where GL and
+     * Vulkan accept the exact size.
+     */
+    final long gpuSize;
     private long shadow;
     private boolean closed;
     private int mappings;
@@ -30,7 +36,7 @@ class WebGpuBuffer extends BaseGpuBuffer {
         if (label != null) {
             WebGpu.setLabel(id, label.get());
         }
-        long gpuSize = Math.max(4, (size + 3) & ~3L);
+        gpuSize = Math.max(16, (size + 15) & ~15L);
         WebGpu.begin(4);
         WebGpu.put(WebGpu.CREATE_BUFFER);
         WebGpu.put(id);
@@ -45,6 +51,7 @@ class WebGpuBuffer extends BaseGpuBuffer {
     WebGpuBuffer(int existingId, @GpuBuffer.Usage int usage, long size) {
         super(usage, size);
         this.id = existingId;
+        this.gpuSize = size;
     }
 
     static int gpuUsage(@GpuBuffer.Usage int usage) {

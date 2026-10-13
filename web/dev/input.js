@@ -183,6 +183,15 @@
     else buttonMask &= ~(1 << (button - 1));
     setState(48, buttonMask);
     const [x, y] = document.pointerLockElement === canvas() ? [lastX, lastY] : mousePos(e);
+    if (x !== lastX || y !== lastY) {
+      // Minecraft clicks at the last motion position; a press can arrive without a
+      // preceding mousemove (touch taps, synthetic clicks), so report the move first.
+      push(EV.MOUSE_MOTION, buttonMask, 0, 0, x, y, x - lastX, y - lastY);
+      lastX = x;
+      lastY = y;
+      setState(40, x, true);
+      setState(44, y, true);
+    }
     push(down ? EV.MOUSE_DOWN : EV.MOUSE_UP, button, e.detail || 1, 0, x, y);
     if (down) canvas().focus();
     e.preventDefault();

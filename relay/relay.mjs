@@ -62,15 +62,34 @@ async function resolveTarget(host, port) {
       // no SRV record: connect directly
     }
   }
-  const { address } = await dns.lookup(host);
-  return { host, port, address };
+  // Every address: "localhost" is ::1 first on Windows, while a server may listen on
+  // 127.0.0.1 only.
+  const addresses = (await dns.lookup(host, { all: true })).map((a) => a.address);
+  return { host, port, addresses };
 }
 
-function permitted(requested, target) {
-  if (!isPrivate(target.address)) return true;
+function permitted(requested, target, address) {
+  if (!isPrivate(address)) return true;
   if (ALLOW_LAN) return true;
-  const keys = [`${requested.host}:${requested.port}`, `${target.host}:${target.port}`, `${target.address}:${target.port}`];
+  const keys = [`${requested.host}:${requested.port}`, `${target.host}:${target.port}`, `${address}:${target.port}`];
   return keys.some((k) => ALLOWED.has(k.toLowerCase()));
+}
+
+/** Connects to the first address that accepts; rejects with the last error. */
+function connectFirst(addresses, port) {
+  return new Promise((resolve, reject) => {
+    const attempt = (i, lastError) => {
+      if (i >= addresses.length) return reject(lastError);
+      const tcp = connect({ host: addresses[i], port });
+      const onError = (e) => attempt(i + 1, e);
+      tcp.once("error", onError);
+      tcp.once("connect", () => {
+        tcp.off("error", onError);
+        resolve({ tcp, address: addresses[i] });
+      });
+    };
+    attempt(0, new Error("no address"));
+  });
 }
 
 // ---- WebSocket framing (RFC 6455, server side) ----
@@ -158,6 +177,8 @@ server.on("upgrade", async (req, socket) => {
     return fail("400 Bad Request", "invalid host or port");
   }
 
+  // An error while resolving/connecting below must not crash the relay (no listener yet).
+  socket.on("error", () => {});
   const accept = createHash("sha1").update(key + GUID).digest("base64");
   socket.write(`HTTP/1.1 101 Switching Protocols\r\nupgrade: websocket\r\nconnection: Upgrade\r\nsec-websocket-accept: ${accept}\r\n\r\n`);
   socket.setNoDelay(true);
@@ -173,20 +194,26 @@ server.on("upgrade", async (req, socket) => {
     log(`${host}:${port}: unknown host`);
     return closeWith(4004, `Unknown host ${host}`);
   }
-  if (!permitted({ host, port }, target)) {
-    log(`${host}:${port} → ${target.address}: private address not allowed`);
+  // Only addresses that pass the private-range check are dialed (each one is checked, so a
+  // name can't mix a public address with a private one to get through).
+  const candidates = target.addresses.filter((a) => permitted({ host, port }, target, a));
+  if (!candidates.length) {
+    log(`${host}:${port} → ${target.addresses.join(", ")}: private address not allowed`);
     return closeWith(4003, `${host} is a private address; start the relay with --allow ${host}:${port} or --allow-lan`);
   }
 
-  const tcp = connect({ host: target.address, port: target.port });
+  // The browser's data waits in the socket (no 'data' listener yet) until this connects.
+  let tcp;
+  try {
+    let address;
+    ({ tcp, address } = await connectFirst(candidates, target.port));
+    log(`${host}:${port} → ${target.host}:${target.port} (${address}) connected`);
+  } catch (e) {
+    log(`${host}:${port}: ${e.code ?? e.message}`);
+    return closeWith(4000, `Connection failed: ${e.code ?? e.message}`);
+  }
+  if (socket.destroyed) return tcp.destroy();
   tcp.setNoDelay(true);
-  const pending = [];
-  let tcpOpen = false;
-  tcp.on("connect", () => {
-    tcpOpen = true;
-    log(`${host}:${port} → ${target.host}:${target.port} (${target.address}) connected`);
-    for (const chunk of pending.splice(0)) tcp.write(chunk);
-  });
   tcp.on("data", (data) => {
     if (!socket.write(frame(0x2, data))) {
       tcp.pause();
@@ -211,9 +238,7 @@ server.on("upgrade", async (req, socket) => {
       if (!fin) return;
       const data = message.length === 1 ? message[0] : Buffer.concat(message);
       message = [];
-      if (!tcpOpen) {
-        pending.push(data);
-      } else if (!tcp.write(data)) {
+      if (!tcp.write(data)) {
         socket.pause();
         tcp.once("drain", () => socket.resume());
       }

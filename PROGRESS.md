@@ -14,7 +14,7 @@ multiplayer through a WebSocket↔TCP relay.
 | 2. Headless image | **Done** (2026-10-13) |
 | 3. Rendering + input | **Done** (2026-10-13): title screen, menus, options, Sodium video settings; clicks, keys, text |
 | 4. Singleplayer | **Core done** (2026-10-13): integrated server as a green thread, worlds play and persist in OPFS across reloads. World zip import/export done. Open: perf (Phase 8) |
-| 5. Multiplayer | **In progress**: relay + WebSocket channel; server list ping to Hypixel works. Next: join a local offline-mode server |
+| 5. Multiplayer | **Done** (2026-10-13): relay + WebSocket channel; Hypixel server list ping; joined a local offline-mode 26.3 server: chat, movement, block breaking, item pickup, clean disconnect (compression on). Encryption (online mode) is tested with Phase 6 |
 | 6. Microsoft sign-in | — |
 | 7. Completeness | — |
 | 8. Performance | — |
@@ -500,7 +500,20 @@ stub). Further fixes on the way to the title screen:
 - Test server: `node tools/test-server.mjs [--version 26.3] [--port 25565] [--accept-eula]`
   downloads Mojang's server.jar (hash-checked against the version manifest) into
   `build/test-server/<version>/`, sets offline mode on 127.0.0.1, and only starts once the
-  user accepts the EULA with the flag. Not run yet (needs the user's go-ahead).
+  user accepts the EULA with the flag (the user accepted it on 2026-10-13). Fixes found on
+  first run: Java needs a space-free temp dir (Windows selector → "Unable to establish
+  loopback connection: Invalid argument"), and 26.3 servers whitelist by default
+  (white-list/enforce-whitelist forced off; the server only listens on loopback).
+- Relay: `localhost` resolves to ::1 first on Windows while the test server listens on
+  127.0.0.1 only; the relay now resolves every address, checks each against the
+  private-range rules, and dials them in order (first that accepts). An early socket error
+  listener keeps a dropped browser connection from crashing it mid-resolve.
+- **Join test passed** (2026-10-13, local offline-mode 26.3 server through the relay): server
+  list ping (MOTD, 0/20), login, configuration, world loads in ~6 s (Sodium renders it), chat
+  reaches the server (`[Not Secure] <Player> hello from the browser`), walking, breaking a
+  grass block (drops picked up), Esc → Disconnect ("Player lost connection: Disconnected").
+  Default network-compression-threshold (256) was on, so compression works. The first join
+  of a page load seemed slower (one-time warm-up; not measured).
 - Dev-pane input note: the browser pane's `type` action inserts text without key events, so
   the game sees nothing; dispatch `KeyboardEvent`s on the canvas instead (see Phase 7 TODO on
   IME/beforeinput).

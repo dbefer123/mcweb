@@ -11,7 +11,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
-import { BUILD, JAVA } from "./config.mjs";
+import { BUILD, JAVA, TMP } from "./config.mjs";
 
 const argv = process.argv.slice(2);
 const opt = (name, fallback) => {
@@ -68,6 +68,9 @@ for (const [k, v] of Object.entries({
   "view-distance": "8",
   "simulation-distance": "6",
   "spawn-protection": "0",
+  // Loopback-only test server: anyone who can reach it is on this machine.
+  "white-list": "false",
+  "enforce-whitelist": "false",
 })) props.set(k, v);
 writeFileSync(propsPath, [...props].map(([k, v]) => `${k}=${v}`).join("\n") + "\n");
 
@@ -86,5 +89,12 @@ if (!eulaAccepted) {
 
 // 4. Run it (Ctrl+C or "stop" to quit). Don't run it during an image build: memory.
 console.log(`starting the server on 127.0.0.1:${port} (offline mode) in ${dir}`);
-const child = spawn(JAVA, ["-Xms1G", "-Xmx2G", "-jar", "server.jar", "nogui"], { cwd: dir, stdio: "inherit" });
+// A temp dir without spaces: Java's Windows selector makes a Unix-domain socket there, and
+// the default (under "C:\Users\<name with space>") fails with "Invalid argument: connect".
+mkdirSync(TMP, { recursive: true });
+const child = spawn(JAVA, ["-Xms1G", "-Xmx2G", `-Djava.io.tmpdir=${TMP}`, "-jar", "server.jar", "nogui"], {
+  cwd: dir,
+  stdio: "inherit",
+  env: { ...process.env, TEMP: TMP, TMP },
+});
 child.on("exit", (code) => process.exit(code ?? 0));

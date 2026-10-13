@@ -371,6 +371,13 @@ stub). Further fixes on the way to the title screen:
   The client crashed on its first world frame: IncompatibleClassChangeError in Sodium's
   section culling. Cause: the class-level `SimpleFrustum` substitution didn't declare
   `implements Frustum` (a class-level substitution replaces the declaration too).
+- **The world renders and the player can walk** (2026-10-13): first singleplayer world in
+  the browser (terrain via Sodium, sky, hand, hotbar, HUD), ~30 fps at ~3 ms/frame in the
+  game loop (pane size), no WebGPU errors at first; holding W walks.
+  Then fixed: Sodium's arena compaction copies within one buffer (allowed in GL, rejected
+  by WebGPU → invalid command buffers) → same-buffer copies bounce through a scratch
+  buffer; the world-icon screenshot needs `stbi_write_png_compression_level` /
+  `force_png_filter` (STB globals) → nmem int slots.
 - **Deviation from the plan:** the integrated server runs as a green thread next to the
   client, not in a Worker. IntegratedServer is tied to the client's `Minecraft` object, and
   WasmGC heaps can't be shared between Workers (a Worker server would be a second image

@@ -33,6 +33,8 @@ final class WebGpuCommandEncoder implements CommandEncoderBackend {
     private final WebGpuTransientMemory transientMemory = new WebGpuTransientMemory();
     private WebGpuRenderPass currentPass;
     private boolean warnedUnaligned;
+    /** Intermediate for copies within one buffer (see {@link #copy}). */
+    private WebGpuBuffer copyScratch;
 
     WebGpuCommandEncoder(WebGpuDevice device) {
         this.device = device;
@@ -266,13 +268,37 @@ final class WebGpuCommandEncoder implements CommandEncoderBackend {
     }
 
     private void copy(WebGpuBuffer src, long srcOffset, WebGpuBuffer dst, long dstOffset, long size) {
+        long n = (size + 3) & ~3L;
+        if (src.id == dst.id) {
+            // WebGPU rejects copies within one buffer; GL allows non-overlapping ranges and
+            // Sodium's arena compaction relies on it. Bounce through a scratch buffer.
+            WebGpuBuffer scratch = copyScratch(n); // created before any command is begun
+            emitCopy(src.id, srcOffset, scratch.id, 0, n);
+            emitCopy(scratch.id, 0, dst.id, dstOffset, n);
+            return;
+        }
+        emitCopy(src.id, srcOffset, dst.id, dstOffset, n);
+    }
+
+    private static void emitCopy(int srcId, long srcOffset, int dstId, long dstOffset, long size) {
         WebGpu.begin(6);
         WebGpu.put(WebGpu.COPY_B2B);
-        WebGpu.put(src.id);
+        WebGpu.put(srcId);
         WebGpu.put((int) srcOffset);
-        WebGpu.put(dst.id);
+        WebGpu.put(dstId);
         WebGpu.put((int) dstOffset);
-        WebGpu.put((int) ((size + 3) & ~3L));
+        WebGpu.put((int) size);
+    }
+
+    private WebGpuBuffer copyScratch(long size) {
+        if (copyScratch == null || copyScratch.gpuSize < size) {
+            if (copyScratch != null) {
+                copyScratch.close(); // destroyed after the next submit
+            }
+            copyScratch = new WebGpuBuffer(() -> "copy scratch", GpuBuffer.USAGE_COPY_SRC | GpuBuffer.USAGE_COPY_DST,
+                    Math.max(size, 1L << 20));
+        }
+        return copyScratch;
     }
 
     @Override

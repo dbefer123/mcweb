@@ -22,6 +22,17 @@ public final class StbSubstitutions {
 
     private static String failure = "";
     private static long failureString;
+    /** stb_image_write's global ints (compression level, forced filter), as nmem slots. */
+    private static long globals;
+
+    static long globalInt(int index) {
+        if (globals == 0) {
+            globals = NativeHeap.calloc(2, 4);
+            Nmem.putInt(globals, 8);
+            Nmem.putInt(globals + 4, -1);
+        }
+        return globals + 4L * index;
+    }
 
     static long load(long buffer, int len, long x, long y, long channels, int desired) {
         byte[] data = new byte[len];
@@ -146,6 +157,17 @@ final class Target_org_lwjgl_stb_STBImageWrite {
     @Substitute
     public static int nstbi_write_png_to_func(long func, long context, int w, int h, int comp, long data, int stride) {
         return StbSubstitutions.writePng(func, context, w, h, comp, data, stride);
+    }
+
+    /** Address of stb_image_write's global int (Minecraft sets it before writing PNGs). */
+    @Substitute
+    public static long nstbi_write_png_compression_level() {
+        return StbSubstitutions.globalInt(0);
+    }
+
+    @Substitute
+    public static long nstbi_write_force_png_filter() {
+        return StbSubstitutions.globalInt(1);
     }
 }
 

@@ -22,16 +22,25 @@ public final class StbSubstitutions {
 
     private static String failure = "";
     private static long failureString;
-    /** stb_image_write's global ints (compression level, forced filter), as nmem slots. */
+    /**
+     * stb_image_write's globals as 8-byte nmem slots. STBImageWrite's static initializer
+     * takes the address of each (a failure there breaks every PNG write).
+     */
+    static final int PNG_COMPRESSION_LEVEL = 0;
+    static final int FORCE_PNG_FILTER = 1;
+    static final int ZLIB_COMPRESS = 2;
+    static final int TGA_WITH_RLE = 3;
     private static long globals;
 
-    static long globalInt(int index) {
+    static long global(int slot) {
         if (globals == 0) {
-            globals = NativeHeap.calloc(2, 4);
-            Nmem.putInt(globals, 8);
-            Nmem.putInt(globals + 4, -1);
+            globals = NativeHeap.calloc(4, 8);
+            Nmem.putInt(globals + 8L * PNG_COMPRESSION_LEVEL, 8);
+            Nmem.putInt(globals + 8L * FORCE_PNG_FILTER, -1);
+            Nmem.putLong(globals + 8L * ZLIB_COMPRESS, 0); // no custom zlib
+            Nmem.putInt(globals + 8L * TGA_WITH_RLE, 1);
         }
-        return globals + 4L * index;
+        return globals + 8L * slot;
     }
 
     static long load(long buffer, int len, long x, long y, long channels, int desired) {
@@ -159,15 +168,25 @@ final class Target_org_lwjgl_stb_STBImageWrite {
         return StbSubstitutions.writePng(func, context, w, h, comp, data, stride);
     }
 
-    /** Address of stb_image_write's global int (Minecraft sets it before writing PNGs). */
+    /** Addresses of stb_image_write's globals (taken by STBImageWrite's static initializer). */
     @Substitute
     public static long nstbi_write_png_compression_level() {
-        return StbSubstitutions.globalInt(0);
+        return StbSubstitutions.global(StbSubstitutions.PNG_COMPRESSION_LEVEL);
     }
 
     @Substitute
     public static long nstbi_write_force_png_filter() {
-        return StbSubstitutions.globalInt(1);
+        return StbSubstitutions.global(StbSubstitutions.FORCE_PNG_FILTER);
+    }
+
+    @Substitute
+    public static long nstbi_zlib_compress() {
+        return StbSubstitutions.global(StbSubstitutions.ZLIB_COMPRESS);
+    }
+
+    @Substitute
+    public static long nstbi_write_tga_with_rle() {
+        return StbSubstitutions.global(StbSubstitutions.TGA_WITH_RLE);
     }
 }
 

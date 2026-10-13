@@ -96,6 +96,9 @@ public final class WebRuntime {
         }
         WebJs.log("[web] boot: unpacked " + files + " embedded files, " + hostFiles + " files from the page; loader jar " + fabricLoaderJar
                 + "; working directory " + cwd);
+        // The page restored /root/game from browser storage (with the other host files);
+        // from here on, changes are mirrored back.
+        dev.mcwebclient.web.storage.PersistentStorage.start();
     }
 
     /**

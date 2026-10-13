@@ -7,6 +7,7 @@ import com.oracle.svm.core.annotate.Alias;
 import com.oracle.svm.core.annotate.Substitute;
 import com.oracle.svm.core.annotate.TargetClass;
 
+import dev.mcwebclient.web.exec.CoThreads;
 import dev.mcwebclient.web.exec.WebExecutorService;
 import dev.mcwebclient.web.gpu.WebGpuBackend;
 import net.minecraft.TracingExecutor;
@@ -50,6 +51,52 @@ final class Target_net_minecraft_client_FramerateLimiter {
 }
 
 /**
+ * managedBlock waits for a condition while running the loop's tasks. On green threads,
+ * other threads only progress while this one is suspended, but a time-based condition can
+ * already hold on entry (the server's stop loop waits "until the next tick", 1 ms ahead,
+ * after work that took longer) and loops around it then never block: the server spun
+ * forever waiting for chunk saves that worker threads never got to run. Yield points at
+ * entry and between tasks give other threads a turn at least every few milliseconds.
+ * (No baked mixins in this method.)
+ */
+@TargetClass(net.minecraft.util.thread.BlockableEventLoop.class)
+final class Target_net_minecraft_util_thread_BlockableEventLoop {
+    @Alias private int blockingCount;
+
+    @Alias
+    protected native boolean pollTask();
+
+    @Alias
+    protected native void waitForTasks();
+
+    @Substitute
+    public void managedBlock(java.util.function.BooleanSupplier condition) {
+        blockingCount++;
+        try {
+            CoThreads.maybeYield();
+            while (!condition.getAsBoolean()) {
+                if (pollTask()) {
+                    CoThreads.maybeYield();
+                } else {
+                    waitForTasks();
+                }
+            }
+        } finally {
+            blockingCount--;
+        }
+    }
+}
+
+/** Spin-wait hints become scheduling points: a spinning green thread must let others run. */
+@TargetClass(Thread.class)
+final class Target_java_lang_Thread_OnSpinWait {
+    @Substitute
+    public static void onSpinWait() {
+        CoThreads.maybeYield();
+    }
+}
+
+/**
  * Minecraft's own loop (Minecraft.run) runs on the main green thread. The top of each
  * iteration (pollEvents) is the frame boundary: the previous frame has been submitted and
  * presented, so the loop waits there for the browser's next animation frame.
@@ -65,6 +112,21 @@ final class Target_com_mojang_blaze3d_systems_RenderSystem {
         pollEventsWaitStart.set(net.minecraft.util.Util.getMillis());
         pollingEvents.set(true);
         eventHandler.pollEvents();
+        pollingEvents.set(false);
+    }
+
+    /**
+     * The loops that render while waiting for the integrated server (world load, and
+     * "Saving world" while it stops: {@code while (!server.isShutdown()) { pumpEvents;
+     * renderFrame }}) never block on their own; on the desktop the swap paces them. Here
+     * they must wait for the next frame, or the server thread never gets to run.
+     */
+    @Substitute
+    public static void pumpEvents(SDLEventHandler eventHandler) {
+        GameLoop.awaitFrame();
+        pollEventsWaitStart.set(net.minecraft.util.Util.getMillis());
+        pollingEvents.set(true);
+        eventHandler.pumpEvents();
         pollingEvents.set(false);
     }
 }

@@ -173,7 +173,84 @@ Error.stackTraceLimit = 200;
     frameStats() {
       return frameLog.slice();
     },
+    persist: createPersist(),
   };
+
+  // ---- Persistent game directory (platform/web/.../storage/PersistentStorage.java) ----
+  // /root/game (saves, options, configs, server list) is mirrored to the origin-private
+  // file system under mcweb/game/: restored before the game starts, updated as it changes.
+  function createPersist() {
+    const available = typeof navigator.storage?.getDirectory === "function";
+    const rootPromise = available
+      ? navigator.storage.getDirectory().then((root) => root.getDirectoryHandle("mcweb", { create: true }))
+      : null;
+    // Pending operations by path: a newer write or a removal replaces an older one.
+    const pending = new Map();
+    let running = false;
+
+    async function parentOf(path, create) {
+      const parts = path.split("/");
+      let dir = await rootPromise;
+      for (const part of parts.slice(0, -1)) dir = await dir.getDirectoryHandle(part, { create });
+      return [dir, parts[parts.length - 1]];
+    }
+
+    async function drain() {
+      if (running) return;
+      running = true;
+      try {
+        while (pending.size) {
+          const [path, data] = pending.entries().next().value;
+          pending.delete(path);
+          try {
+            if (data) {
+              const [dir, name] = await parentOf(`game/${path}`, true);
+              const writable = await (await dir.getFileHandle(name, { create: true })).createWritable();
+              await writable.write(data);
+              await writable.close();
+            } else {
+              const [dir, name] = await parentOf(`game/${path}`, false);
+              await dir.removeEntry(name);
+            }
+          } catch (e) {
+            if (data || e.name !== "NotFoundError") append(`[storage] ${data ? "write" : "remove"} ${path} failed: ${e.message}`);
+          }
+        }
+      } finally {
+        running = false;
+      }
+    }
+
+    async function collect(dir, prefix, out) {
+      for await (const [name, handle] of dir.entries()) {
+        const path = `${prefix}${name}`;
+        if (handle.kind === "directory") await collect(handle, `${path}/`, out);
+        else out.push({ path, data: new Uint8Array(await (await handle.getFile()).arrayBuffer()) });
+      }
+    }
+
+    return {
+      available,
+      write(path, data) {
+        pending.set(path, data);
+        drain();
+      },
+      remove(path) {
+        pending.set(path, null);
+        drain();
+      },
+      /** Stored files as { path: "game/...", data } for the image's file import. */
+      async loadAll() {
+        if (!available) return [];
+        navigator.storage.persist?.().catch(() => {}); // ask the browser not to evict it
+        const out = [];
+        const root = await rootPromise;
+        const game = await root.getDirectoryHandle("game", { create: true });
+        await collect(game, "game/", out);
+        return out;
+      },
+    };
+  }
   // Java System.out/err go to console.log/error: mirror them into the panel too.
   for (const level of ["log", "warn", "error"]) {
     const original = console[level].bind(console);
@@ -258,6 +335,15 @@ Error.stackTraceLimit = 200;
       files.push({ path: "resources/vanilla.zip", data });
     } else {
       append("[host] bundle/vanilla-resources.zip missing (run tools/build-image.mjs)");
+    }
+    // The game directory as last stored (worlds, options, configs).
+    try {
+      const stored = await globalThis.mcweb.persist.loadAll();
+      for (const f of stored) bytes += f.data.length;
+      files.push(...stored);
+      append(`[host] restored ${stored.length} game files from browser storage`);
+    } catch (e) {
+      append(`[host] could not read browser storage: ${e.message}`);
     }
     globalThis.mcweb.files = files;
     append(`[host] staged ${files.length} files (${(bytes / 1048576).toFixed(1)} MiB)`);

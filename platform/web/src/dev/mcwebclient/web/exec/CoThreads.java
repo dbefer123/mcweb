@@ -407,6 +407,18 @@ final class Target_com_oracle_svm_core_thread_PlatformThreads {
     }
 }
 
+/**
+ * Thread.sleep's native. SVM core's substitution of it (to PlatformThreads.sleep) is not
+ * active in Web Image, and Web Image's own (a no-op) is disabled in build-image.mjs.
+ */
+@TargetClass(Thread.class)
+final class Target_java_lang_Thread_Sleep {
+    @Substitute
+    private static void sleepNanos0(long nanos) throws InterruptedException {
+        CoThreads.sleep(nanos);
+    }
+}
+
 @TargetClass(className = "com.oracle.svm.webimage.threads.WebImageJSJavaThreads")
 final class Target_com_oracle_svm_webimage_threads_WebImageJSJavaThreads {
     @Substitute

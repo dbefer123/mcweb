@@ -13,7 +13,7 @@ multiplayer through a WebSocket↔TCP relay.
 | 1. Inputs + Fabric baker + desktop checkpoint | **Done** (2026-10-12) — local-server join deferred to Phase 5 |
 | 2. Headless image | **Done** (2026-10-13) |
 | 3. Rendering + input | **Done** (2026-10-13): title screen, menus, options, Sodium video settings; clicks, keys, text |
-| 4. Singleplayer | **In progress**: JSPI green threads (Java threads as coroutines) to run the integrated server |
+| 4. Singleplayer | **Core done** (2026-10-13): integrated server as a green thread, worlds play and persist in OPFS across reloads. Open: world zip import/export, perf |
 | 5. Multiplayer | — |
 | 6. Microsoft sign-in | — |
 | 7. Completeness | — |
@@ -378,6 +378,32 @@ stub). Further fixes on the way to the title screen:
   by WebGPU → invalid command buffers) → same-buffer copies bounce through a scratch
   buffer; the world-icon screenshot needs `stbi_write_png_compression_level` /
   `force_png_filter` (STB globals) → nmem int slots.
+- Persistence (`storage/PersistentStorage`, host.js `mcweb.persist`): /root/game (saves,
+  options.txt, configs, servers.dat) is mirrored to OPFS `mcweb/game/`. The page restores it
+  with the other staged files before the image starts; a "Storage sync" green thread
+  compares mtime+size every 5 s and hands changed files / deletions to the page, which
+  writes them to OPFS in the background (coalesced per path). Excludes logs/ and debug/.
+  Note: don't run `build-image.mjs --compile-only` while an image build runs (it rewrites
+  build/image/classes under the builder).
+- `Thread.sleep` was broken: `Thread.sleepNanos0` is an unsupported native in the image
+  (SVM core's substitution isn't active in Web Image; Web Image's no-op is disabled), so the
+  first user of Thread.sleep (the storage sync loop, which caught the error and retried)
+  spun forever and hung the page. Now substituted → CoThreads.sleep. A green thread that
+  never suspends starves everything, so loops sleep outside their try blocks.
+- Spin loops (green threads only switch when one suspends): "Save and Quit" hung the page.
+  The client renders in `while (!server.isShutdown()) { pumpEvents; renderFrame }` (paced by
+  the swap on the desktop) → `RenderSystem.pumpEvents` now waits for the next frame, like
+  pollEvents. The server's stop loop waits "until the next tick" (1 ms ahead) after work
+  that took longer, so `managedBlock` never parked → `BlockableEventLoop.managedBlock` yields
+  (maybeYield) at entry and between tasks; `Thread.onSpinWait` yields too.
+- **Worlds persist** (2026-10-13): create world → Save and Quit (server stops and saves
+  cleanly) → reload the page (same tab) → 91 files restored from OPFS → the world is listed
+  and loads at the same spot. Phase 4's core check passes. (Each new tab of the dev browser
+  pane gets fresh storage; a reload of the same tab keeps it.)
+  Then fixed: STBImageWrite's static initializer takes the address of four stb globals
+  (`nstbi_zlib_compress`, `..._tga_with_rle` were missing) → every PNG write failed (0-byte
+  world icon and screenshots) → all four are nmem slots. `.fabric/` (extracted nested mod
+  jars, ~10 MB) is no longer persisted.
 - **Deviation from the plan:** the integrated server runs as a green thread next to the
   client, not in a Worker. IntegratedServer is tied to the client's `Minecraft` object, and
   WasmGC heaps can't be shared between Workers (a Worker server would be a second image

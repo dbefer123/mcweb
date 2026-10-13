@@ -40,6 +40,25 @@ Error.stackTraceLimit = 200;
     if (follow.checked) logEl.scrollTop = logEl.scrollHeight;
   }
 
+  // The previous page load's log (its last lines) survives a reload for diagnosis:
+  // mcweb.previousLog() in the console. Best effort: storage may be unavailable.
+  const PREVIOUS_LOG_KEY = "mcweb.previousLog";
+  const PREVIOUS_LOG_CHARS = 200_000;
+  let previousLog = "";
+  try {
+    previousLog = localStorage.getItem(PREVIOUS_LOG_KEY) ?? "";
+  } catch {
+    // no storage
+  }
+  addEventListener("pagehide", () => {
+    try {
+      flushLog();
+      localStorage.setItem(PREVIOUS_LOG_KEY, logEl.textContent.slice(-PREVIOUS_LOG_CHARS));
+    } catch {
+      // quota or no storage
+    }
+  });
+
   // ---- Green threads (JSPI; platform/web/.../exec/CoThreads.java) ----
   // Every Java thread runs on its own WebAssembly stack. The build makes main a promising
   // call, and patchImports below wraps the image's CoThreads.suspend* imports in
@@ -142,8 +161,16 @@ Error.stackTraceLimit = 200;
   const FALLBACK_FRAME_MS = 33;
   const ticker = new Worker(URL.createObjectURL(new Blob(
     [`setInterval(() => postMessage(0), ${FALLBACK_FRAME_MS});`], { type: "text/javascript" })));
+  // The ticker also notices when the page was blocked: a Java thread that runs without
+  // yielding stops everything else (timers, input, the other threads) until it suspends.
+  const BLOCKED_REPORT_MS = 2000;
+  let lastTickAt = performance.now();
   ticker.onmessage = () => {
     const now = performance.now();
+    if (now - lastTickAt > BLOCKED_REPORT_MS) {
+      append(`[host] the page was blocked for ${Math.round(now - lastTickAt)} ms (a Java thread ran without yielding)`);
+    }
+    lastTickAt = now;
     if (document.hidden || now - lastAnimationFrameAt > 100) deliverFrame(now);
   };
 
@@ -159,22 +186,206 @@ Error.stackTraceLimit = 200;
       stageEl.textContent = `exited (${code})`;
       append(`[host] game exited with code ${code}`);
     },
-    /** Called by the glue before instantiation (build-image.mjs patch). */
+    /**
+     * Called by the glue before instantiation (build-image.mjs patch): every @JS method
+     * named suspend* (CoThreads, WebSockets) may return a promise the calling Java thread
+     * waits for.
+     */
     patchImports(imports) {
-      let n = 0;
+      const names = [];
       for (const [name, fn] of Object.entries(imports.jsbody)) {
-        if (name.startsWith("_CoThreads.suspend")) {
+        if (/\.suspend[A-Z]/.test(name)) {
           imports.jsbody[name] = new WebAssembly.Suspending(fn);
-          n++;
+          names.push(name.split("___")[0]);
         }
       }
-      if (n !== 4) throw new Error(`expected 4 CoThreads.suspend* imports, found ${n}`);
+      if (!names.some((n) => n.startsWith("_CoThreads."))) throw new Error("CoThreads.suspend* imports not found");
+      append(`[host] suspending imports: ${names.join(", ")}`);
     },
+    net: createNet(),
+    http: createHttp(),
     frameStats() {
       return frameLog.slice();
     },
+    previousLog() {
+      return previousLog;
+    },
     persist: createPersist(),
   };
+
+  // ---- Multiplayer sockets (platform/web/.../net/WebSocketChannel.java) ----
+  // One WebSocket per server connection, to the relay (relay/relay.mjs), which opens the
+  // TCP connection. awaitOpen/awaitMessage may return promises: the Java reader thread
+  // suspends on them. Relay: ?relay=ws://host:port in the page URL, else 127.0.0.1:25580.
+  function createNet() {
+    const relay = new URLSearchParams(location.search).get("relay") ?? "ws://127.0.0.1:25580";
+    const sockets = new Map();
+    let nextId = 1;
+
+    function finish(s, value) {
+      const waiter = s.waiter;
+      s.waiter = null;
+      waiter?.(value);
+    }
+
+    return {
+      open(host, port) {
+        const id = nextId++;
+        const s = { ws: null, state: "connecting", reason: "", queue: [], waiter: null, openWaiter: null };
+        sockets.set(id, s);
+        try {
+          s.ws = new WebSocket(`${relay}/connect?host=${encodeURIComponent(host)}&port=${port}`);
+        } catch (e) {
+          s.state = "closed";
+          s.reason = `Bad relay address ${relay}: ${e.message}`;
+          return id;
+        }
+        s.ws.binaryType = "arraybuffer";
+        s.ws.onopen = () => {
+          s.state = "open";
+          s.openWaiter?.(1);
+          s.openWaiter = null;
+        };
+        s.ws.onmessage = (e) => {
+          s.queue.push(new Uint8Array(e.data));
+          if (s.queue.length === 1) finish(s, s.queue[0].length);
+        };
+        s.ws.onerror = () => {
+          if (!s.reason) s.reason = `Can't reach the relay at ${relay} (start it with: node relay/relay.mjs)`;
+        };
+        s.ws.onclose = (e) => {
+          if (e.reason) s.reason = e.reason;
+          else if (!s.reason) s.reason = `Connection closed (${e.code})`;
+          s.state = "closed";
+          s.openWaiter?.(0);
+          s.openWaiter = null;
+          if (!s.queue.length) finish(s, -1);
+        };
+        return id;
+      },
+      awaitOpen(id) {
+        const s = sockets.get(id);
+        if (!s || s.state === "closed") return 0;
+        if (s.state === "open") return 1;
+        return new Promise((resolve) => (s.openWaiter = resolve));
+      },
+      reason(id) {
+        return sockets.get(id)?.reason || "Connection failed";
+      },
+      awaitMessage(id) {
+        const s = sockets.get(id);
+        if (!s) return -1;
+        if (s.queue.length) return s.queue[0].length;
+        if (s.state === "closed") return -1;
+        return new Promise((resolve) => (s.waiter = resolve));
+      },
+      take(id, nmem, addr) {
+        const s = sockets.get(id);
+        const data = s?.queue.shift();
+        if (data?.length) new Uint8Array(nmem.buffer, addr, data.length).set(data);
+      },
+      send(id, data) {
+        const s = sockets.get(id);
+        if (s?.state === "open") s.ws.send(data);
+      },
+      close(id) {
+        const s = sockets.get(id);
+        if (!s) return;
+        sockets.delete(id);
+        s.state = "closed";
+        s.queue.length = 0;
+        try {
+          s.ws?.close();
+        } catch {
+          // already closing
+        }
+        s.openWaiter?.(0);
+        s.openWaiter = null;
+        finish(s, -1);
+      },
+    };
+  }
+
+  // ---- HTTP (platform/web/.../net/WebUrlHandlers.java) ----
+  // The game's HttpURLConnections are fetch() requests; the Java thread suspends in
+  // await(id) until the response (or the failure) is in. Hosts that don't send CORS headers
+  // fail like an unreachable host.
+  function createHttp() {
+    const requests = new Map();
+    let nextId = 1;
+    // Crash reporting must never leave the page (EntityCulling bundles Sentry; it is also
+    // replaced by a no-op class in the image).
+    const BLOCKED_HOSTS = /(^|\.)sentry\.io$|(^|\.)sentry\./i;
+
+    return {
+      start(url, method, headerLines, body, timeoutMs) {
+        const id = nextId++;
+        const r = { done: false, status: -1, statusText: "", headers: "", body: null, error: "", waiter: null };
+        requests.set(id, r);
+        const settle = () => {
+          r.done = true;
+          r.waiter?.(r.status);
+          r.waiter = null;
+        };
+        let host = "";
+        try {
+          host = new URL(url).hostname;
+        } catch {
+          r.error = `TypeError: bad URL ${url}`;
+          settle();
+          return id;
+        }
+        if (BLOCKED_HOSTS.test(host)) {
+          r.error = `Blocked: requests to ${host} are not allowed`;
+          settle();
+          return id;
+        }
+        const headers = new Headers();
+        for (const line of headerLines.split("\n")) {
+          const i = line.indexOf(":");
+          if (i <= 0) continue;
+          try {
+            headers.append(line.slice(0, i).trim(), line.slice(i + 1).trim());
+          } catch {
+            // a header name or value the browser won't send
+          }
+        }
+        const init = { method, headers, credentials: "omit", cache: "no-store", redirect: "follow" };
+        if (body && method !== "GET" && method !== "HEAD") init.body = body;
+        if (timeoutMs > 0) init.signal = AbortSignal.timeout(timeoutMs);
+        fetch(url, init)
+          .then(async (res) => {
+            r.body = new Uint8Array(await res.arrayBuffer());
+            r.status = res.status;
+            r.statusText = res.statusText;
+            r.headers = [...res.headers].map(([k, v]) => `${k}: ${v}`).join("\n");
+          })
+          .catch((e) => {
+            r.status = -1;
+            r.error = `${e?.name ?? "Error"}: ${e?.message ?? e}`;
+          })
+          .finally(settle);
+        return id;
+      },
+      await(id) {
+        const r = requests.get(id);
+        if (!r) return -1;
+        if (r.done) return r.status;
+        return new Promise((resolve) => (r.waiter = resolve));
+      },
+      error: (id) => requests.get(id)?.error ?? "unknown request",
+      statusText: (id) => requests.get(id)?.statusText ?? "",
+      headers: (id) => requests.get(id)?.headers ?? "",
+      bodyLength: (id) => requests.get(id)?.body?.length ?? 0,
+      takeBody(id, nmem, addr) {
+        const body = requests.get(id)?.body;
+        if (body?.length) new Uint8Array(nmem.buffer, addr, body.length).set(body);
+      },
+      release(id) {
+        requests.delete(id);
+      },
+    };
+  }
 
   // ---- Persistent game directory (platform/web/.../storage/PersistentStorage.java) ----
   // /root/game (saves, options, configs, server list) is mirrored to the origin-private
@@ -208,6 +419,7 @@ Error.stackTraceLimit = 200;
               const writable = await (await dir.getFileHandle(name, { create: true })).createWritable();
               await writable.write(data);
               await writable.close();
+              markInUse();
             } else {
               const [dir, name] = await parentOf(`game/${path}`, false);
               await dir.removeEntry(name);
@@ -218,6 +430,21 @@ Error.stackTraceLimit = 200;
         }
       } finally {
         running = false;
+      }
+    }
+
+    // Browsers may clear best-effort storage (low disk space; in-memory profiles under
+    // memory pressure). A flag in localStorage, which is kept separately, tells a cleared
+    // store from a first visit so the loss can be reported instead of passing silently.
+    const IN_USE_KEY = "mcweb.storageInUse";
+    let markedInUse = false;
+    function markInUse() {
+      if (markedInUse) return;
+      markedInUse = true;
+      try {
+        localStorage.setItem(IN_USE_KEY, new Date().toISOString());
+      } catch {
+        // no localStorage: no loss detection
       }
     }
 
@@ -242,11 +469,24 @@ Error.stackTraceLimit = 200;
       /** Stored files as { path: "game/...", data } for the image's file import. */
       async loadAll() {
         if (!available) return [];
-        navigator.storage.persist?.().catch(() => {}); // ask the browser not to evict it
+        // Ask the browser not to evict it; browsers grant this at their discretion.
+        navigator.storage.persist?.().then((granted) => {
+          if (!granted) append("[host] browser storage is best-effort: the browser may clear it when space runs low (export worlds you want to keep)");
+        }).catch(() => {});
         const out = [];
         const root = await rootPromise;
         const game = await root.getDirectoryHandle("game", { create: true });
         await collect(game, "game/", out);
+        let inUseSince = null;
+        try {
+          inUseSince = localStorage.getItem(IN_USE_KEY);
+        } catch {
+          // no localStorage
+        }
+        if (!out.length && inUseSince) {
+          append(`[host] WARNING: browser storage was cleared by the browser since the last visit ` +
+            `(in use since ${inUseSince}): worlds and settings saved before are gone`);
+        }
         return out;
       },
     };

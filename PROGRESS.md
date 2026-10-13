@@ -14,7 +14,7 @@ multiplayer through a WebSocket↔TCP relay.
 | 2. Headless image | **Done** (2026-10-13) |
 | 3. Rendering + input | **Done** (2026-10-13): title screen, menus, options, Sodium video settings; clicks, keys, text |
 | 4. Singleplayer | **Core done** (2026-10-13): integrated server as a green thread, worlds play and persist in OPFS across reloads. World zip import/export done. Open: perf (Phase 8) |
-| 5. Multiplayer | — |
+| 5. Multiplayer | **In progress**: relay + WebSocket channel; server list ping to Hypixel works. Next: join a local offline-mode server |
 | 6. Microsoft sign-in | — |
 | 7. Completeness | — |
 | 8. Performance | — |
@@ -413,3 +413,94 @@ stub). Further fixes on the way to the title screen:
   client, not in a Worker. IntegratedServer is tied to the client's `Minecraft` object, and
   WasmGC heaps can't be shared between Workers (a Worker server would be a second image
   instance with serialized packets). Revisit as a Phase 8 performance option.
+
+## Phase 5: multiplayer (in progress)
+
+- Relay: `relay/relay.mjs` (no dependencies; minimal RFC 6455 server). `node relay/relay.mjs
+  [--port 25580] [--origin <page origin>]... [--allow host:port]... [--allow-lan]`. Binds
+  127.0.0.1, accepts only listed page origins (default the dev page), resolves the target
+  (SRV `_minecraft._tcp` for port 25565, like the game), refuses private/loopback/link-local
+  destinations unless allowed (default `localhost:25565`), backpressure both ways, close
+  frames carry the reason (unknown host, private address, connection refused). Tested with an
+  echo server: round trip OK, foreign origin → 403, private target → close 4003.
+- Client: `net/WebSocketChannel` (Netty AbstractChannel on a DefaultEventLoopGroup; the
+  game's pipeline runs on top unchanged), `net/WebSockets` (reader green thread per socket,
+  suspending on open/each message; JS side `mcweb.net` in host.js), `Connection.connect`
+  substituted (channel factory, no-op address resolver), `ServerNameResolver.resolveAddress`
+  returns the unresolved host (the relay resolves it; the handshake keeps the typed hostname).
+  host.js wraps every `suspend*` import (CoThreads, WebSockets) in WebAssembly.Suspending.
+  Relay address: `?relay=ws://host:port` on the page, default `ws://127.0.0.1:25580`.
+- First test (Hypixel in the server list): Multiplayer screen crashed on LAN discovery's
+  MulticastSocket (`sun.nio.ch.Net.socket0` unsupported → LinkageError escaped
+  `catch (Exception)`) → socket0 now throws SocketException. Then the relay connected to
+  Hypixel (a Node replay of the status ping through the relay gets the 16 KB status JSON), but
+  the client never sent its handshake: the Netty WebSocket event loop stayed parked in
+  `LinkedBlockingQueue.take` and never ran the reader's `onOpen` task. Found: the reader's
+  raw suspending imports didn't restore `Thread.currentThread()` on resume (fixed with
+  `CoThreads.beginIoWait/endIoWait`); `[net]` log lines added to trace connect/open/send.
+  Also: legacy (pre-1.7) ping now goes through the WebSocket channel (the game's NIO version
+  hit the build-time WEPoll selector → fatal LinkageError), SRV redirect handler disabled.
+- **Server list ping to Hypixel works** (2026-10-13): MOTD, icon, 29052/200000 players, ping
+  bars. Transport trace: handshake 22 B + status request 2 B out, 6–16 KB status JSON in,
+  ping/pong 10 B each, close. Server list (with icon) persists in OPFS.
+- **First ping after a page load froze the page for 30 s** (found 2026-10-13). Sampling
+  `performance.now` callers during the stall (103M calls in 30 s) showed the Netty event loop
+  spinning: `takeTask` → `fetchFromScheduledTaskQueue` → `IdleStateHandler$ReaderIdleTimeoutTask`
+  → reschedule, forever. Cause: netty-codec-http's native-image.properties has
+  `--initialize-at-build-time=io.netty`, so Netty 4.2's `SystemTicker.START_TIME =
+  System.nanoTime()` is the *build machine's* reading. The browser's nanoTime counts from page
+  load, so for the first minutes of a page Netty's clock is negative: `nanoTime + delay`
+  clamps to `Long.MAX_VALUE`, `deadline - now` overflows, and every scheduled task (the 30 s
+  read timeout) is due at once. The loop never parks, so nothing else runs (the pinger's
+  handshake write never gets a turn) until the page clock passes the deadline. Later pings
+  worked only because the page was old enough by then. Fix: `SystemTicker.nanoTime()` →
+  `System.nanoTime()`, `initialNanoTime()` → 0 (net/NettySubstitutions). Only SystemTicker
+  (and ThreadLocalRandom, already run-time) read nanoTime in a Netty static initializer.
+  Lesson: any class initialized at build time that captures a clock, the environment or the
+  machine is suspect; `io.netty` as a whole is build-time here.
+- Diagnostics added: host.js logs `[host] the page was blocked for N ms` when the worker
+  ticker sees a >2 s gap (a Java thread running without yielding freezes the page); the
+  thread watchdog no longer reports idle Netty event loops (`CoThreads.expectIdleWaits`) and
+  the dump skips never-started threads. Every boot logs one ~2 s block (registry bootstrap,
+  then DataFixer's optimization pass, ~1 s on a worker: long tasks without yield points);
+  a Phase 8 item. host.js also keeps the previous page load's log
+  (`mcweb.previousLog()`), since a reload wipes the panel. Note: with JSPI the page can't sample a spinning
+  thread from a timer; wrapping `performance.now` (every Java clock read goes through it) and
+  recording `new Error().stack` every 4096th call does, wasm frames included.
+- Fix verified 2026-10-13: right after a reload the first ping fills in the Hypixel entry
+  within seconds; no page block.
+- **Storage loss in the dev pane** (twice, both while an image build ran): the whole OPFS
+  (including a marker file outside mcweb/) was gone at the next boot while localStorage
+  survived, and the previous session's log (`mcweb.previousLog()`) showed its sync removed
+  nothing, so it wasn't our code. The pane's storage quota is 2.98 GB ≈ 17% of RAM, which is
+  Chromium's formula for in-memory (off-the-record) partitions, not on-disk profiles: the pane
+  most likely keeps OPFS in memory and loses it under memory pressure (12 GB builds). Real
+  Chrome profiles keep OPFS on disk. Hardening anyway: host.js records in localStorage that
+  storage is in use and logs a WARNING when a later boot finds it empty, and says when the
+  browser didn't grant persistent storage (`navigator.storage.persist()` → false here).
+  Java sync hardened too: a failed or partial scan skips the round instead of reading as
+  deletions, files that vanish mid-walk are skipped, an empty scan removes nothing, and a
+  file that fails to read keeps its stored copy. Phase 9: show the warning in the page UI,
+  not just the log.
+- HTTP for the game (groundwork for skins, resource packs and Phase 6), **built and checked
+  2026-10-13** (boot requests reach fetch(); CORS-blocked hosts report "Couldn't reach … doesn't
+  accept requests from web pages"; a successful in-game download is still to be seen, e.g.
+  skins on a server): `net/WebUrlHandlers.WebHttpConnection` is a fetch() request
+  (`mcweb.http` in host.js); the calling thread suspends (`suspendFetch`, JSPI) until it
+  settles. Plain HttpURLConnection even for https (HttpsURLConnection's constructor builds
+  the JDK TLS stack; only EntityCulling's shaded Sentry casts to it). Failures (CORS, offline)
+  → ConnectException, timeouts → SocketTimeoutException, ≥400 → FileNotFoundException/IOException
+  with the error stream, Content-Length reports the decoded body. host.js refuses Sentry hosts
+  (defence in depth; Sentry is already a no-op class). Hosts without CORS still need the
+  allowlisted proxy planned for Phase 6. CORS probe from the page (anonymous GET,
+  2026-10-13): **allowed** textures.minecraft.net (skins/capes), piston-meta.mojang.com;
+  **blocked** discovery.minecraftservices.com, api.minecraftservices.com,
+  sessionserver.mojang.com, api.mojang.com, pc.realms.minecraft.net. The image grew from
+  155.7 to 165.4 MiB with it (code after connect() became reachable); Phase 8 size item.
+- Test server: `node tools/test-server.mjs [--version 26.3] [--port 25565] [--accept-eula]`
+  downloads Mojang's server.jar (hash-checked against the version manifest) into
+  `build/test-server/<version>/`, sets offline mode on 127.0.0.1, and only starts once the
+  user accepts the EULA with the flag. Not run yet (needs the user's go-ahead).
+- Dev-pane input note: the browser pane's `type` action inserts text without key events, so
+  the game sees nothing; dispatch `KeyboardEvent`s on the canvas instead (see Phase 7 TODO on
+  IME/beforeinput).

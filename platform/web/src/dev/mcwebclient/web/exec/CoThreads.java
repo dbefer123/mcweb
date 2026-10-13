@@ -50,8 +50,9 @@ public final class CoThreads {
     private static final int SLEEPING = 4;
     private static final int YIELDING = 5;
     private static final int AWAITING_FRAME = 6;
+    private static final int AWAITING_IO = 7;
     private static final String[] STATE_NAMES = {"running", "parked", "parked (timed)", "waiting (Object.wait)",
-        "sleeping", "yielding", "awaiting frame"};
+        "sleeping", "yielding", "awaiting frame", "awaiting I/O"};
 
     private static final class Co {
         final Thread thread;
@@ -64,6 +65,8 @@ public final class CoThreads {
         long since;
         Throwable parkSite;
         boolean reported;
+        /** Waits for work for long stretches by design (an event loop): no stuck reports. */
+        boolean idleWaits;
 
         Co(Thread thread, int key) {
             this.thread = thread;
@@ -93,6 +96,11 @@ public final class CoThreads {
 
     public static Thread mainThread() {
         return mainThread;
+    }
+
+    /** Marks a thread (before it starts) whose untimed waits are idle time, not a hang. */
+    public static void expectIdleWaits(Thread t) {
+        co(t).idleWaits = true;
     }
 
     private static Co co(Thread t) {
@@ -210,10 +218,10 @@ public final class CoThreads {
 
     /** LockSupport.unpark. */
     public static void unpark(Thread t) {
-        if (t == null) {
-            return;
+        Co c = t == null ? null : THREADS.get(t);
+        if (c == null) {
+            return; // not started (or finished): nothing to wake, as in the JDK
         }
-        Co c = co(t);
         c.permit = true;
         if (c.parked) {
             c.parked = false;
@@ -244,6 +252,22 @@ public final class CoThreads {
         if (System.nanoTime() - sliceStart > SLICE_NANOS) {
             yieldNow();
         }
+    }
+
+    /**
+     * For code with its own suspending import (e.g. waiting for a WebSocket message): call
+     * before suspending, and {@link #endIoWait} with the result right after resuming, so
+     * {@code Thread.currentThread()} is this thread again. Every suspension must be bracketed
+     * like this: after a resume, the current-thread slot still names whoever ran last.
+     */
+    public static Thread beginIoWait() {
+        Thread me = Thread.currentThread();
+        enter(co(me), AWAITING_IO);
+        return me;
+    }
+
+    public static void endIoWait(Thread me) {
+        resumed(me, co(me));
     }
 
     /** Waits for the next animation frame (or the hidden-page ticker). */
@@ -318,7 +342,8 @@ public final class CoThreads {
 
     private static void reportStuck(long now) {
         for (Co c : new ArrayList<>(THREADS.values())) {
-            if ((c.state == PARKED || c.state == WAITING) && !c.reported && now - c.since >= STUCK_NANOS && !idleByDesign(c)) {
+            if ((c.state == PARKED || c.state == WAITING) && !c.reported && !c.idleWaits && now - c.since >= STUCK_NANOS
+                    && !idleByDesign(c)) {
                 c.reported = true;
                 WebJs.log("[threads] '" + c.thread.getName() + "' has been " + STATE_NAMES[c.state] + " for "
                         + (now - c.since) / 1_000_000_000L + " s on " + describe(LockSupport.getBlocker(c.thread)));
@@ -333,6 +358,9 @@ public final class CoThreads {
         long now = System.nanoTime();
         StringBuilder sb = new StringBuilder("[threads] dump:");
         for (Co c : new ArrayList<>(THREADS.values())) {
+            if (!c.alive) {
+                continue; // registered (e.g. marked) but never started
+            }
             sb.append("\n  '").append(c.thread.getName()).append("' ").append(STATE_NAMES[c.state])
                     .append(" for ").append((now - c.since) / 1_000_000L).append(" ms");
             Object blocker = LockSupport.getBlocker(c.thread);

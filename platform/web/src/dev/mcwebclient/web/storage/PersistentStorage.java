@@ -1,7 +1,9 @@
 package dev.mcwebclient.web.storage;
 
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.file.Files;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.HashMap;
@@ -44,7 +46,8 @@ public final class PersistentStorage {
             WebJs.log("[storage] no persistent storage in this browser: worlds and settings last until the page closes");
             return;
         }
-        stored = scan();
+        Map<String, Long> initial = scan();
+        stored = initial != null ? initial : new HashMap<>();
         WebJs.log("[storage] keeping " + stored.size() + " game files in browser storage");
         Thread t = new Thread(PersistentStorage::loop, "Storage sync");
         t.setDaemon(true);
@@ -68,6 +71,9 @@ public final class PersistentStorage {
             return;
         }
         Map<String, Long> now = scan();
+        if (now == null) {
+            return; // incomplete scan: changing nothing beats deleting what it missed
+        }
         int written = 0;
         List<String> failed = new java.util.ArrayList<>();
         for (Map.Entry<String, Long> e : now.entrySet()) {
@@ -80,10 +86,20 @@ public final class PersistentStorage {
                 }
             }
         }
-        failed.forEach(now::remove); // not recorded as stored: tried again next time
+        for (String path : failed) {
+            // Unreadable right now: keep what is stored (or nothing) so the next sync retries.
+            Long old = stored.get(path);
+            if (old != null) {
+                now.put(path, old);
+            } else {
+                now.remove(path);
+            }
+        }
         int removed = 0;
         for (String path : stored.keySet()) {
-            if (!now.containsKey(path)) {
+            // The game directory is never legitimately empty (options.txt): an empty scan
+            // means something went wrong, so it removes nothing.
+            if (!now.isEmpty() && !now.containsKey(path)) {
                 hostRemove(path);
                 removed++;
             }
@@ -94,15 +110,26 @@ public final class PersistentStorage {
         }
     }
 
-    /** Relative path → modification stamp (time and size) of every file worth keeping. */
+    /**
+     * Relative path → modification stamp (time and size) of every file worth keeping, or
+     * null if the walk failed partway (a partial map would read as mass deletion). Files
+     * that vanish while the walk runs (another thread may run while this one waits for a
+     * file system lock, e.g. the game swapping servers.dat through a temp file) are skipped.
+     */
     private static Map<String, Long> scan() {
         Map<String, Long> files = new HashMap<>();
         if (!Files.isDirectory(ROOT)) {
-            return files;
+            WebJs.log("[storage] " + ROOT + " is missing; not syncing");
+            return null;
         }
         try (Stream<Path> walk = Files.walk(ROOT)) {
             for (Path p : (Iterable<Path>) walk::iterator) {
-                BasicFileAttributes a = Files.readAttributes(p, BasicFileAttributes.class);
+                BasicFileAttributes a;
+                try {
+                    a = Files.readAttributes(p, BasicFileAttributes.class);
+                } catch (NoSuchFileException gone) {
+                    continue;
+                }
                 if (!a.isRegularFile()) {
                     continue;
                 }
@@ -112,8 +139,9 @@ public final class PersistentStorage {
                 }
                 files.put(rel, a.lastModifiedTime().toMillis() * 31 + a.size());
             }
-        } catch (IOException e) {
-            WebJs.log("[storage] scan failed: " + e);
+        } catch (IOException | UncheckedIOException e) {
+            WebJs.log("[storage] scan failed, skipping this sync: " + e);
+            return null;
         }
         return files;
     }

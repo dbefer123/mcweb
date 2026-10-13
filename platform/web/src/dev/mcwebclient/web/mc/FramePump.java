@@ -15,6 +15,8 @@ import net.minecraft.client.Minecraft;
 public final class FramePump {
     /** Background work budget per frame before the game tick. */
     private static final long BACKGROUND_BUDGET_NANOS = 4_000_000L;
+    /** While a loading overlay is up, frames are cheap and background work (resource reload) is the point. */
+    private static final long LOADING_BUDGET_NANOS = 12_000_000L;
 
     private static Minecraft minecraft;
     private static Target_net_minecraft_client_Minecraft game;
@@ -39,7 +41,7 @@ public final class FramePump {
             return;
         }
         try {
-            WebScheduler.pumpFrame(BACKGROUND_BUDGET_NANOS);
+            WebScheduler.pumpFrame(minecraft.gui.overlay() != null ? LOADING_BUDGET_NANOS : BACKGROUND_BUDGET_NANOS);
             WebGpu.pollReadbacks();
             if (!game.running) {
                 stop();

@@ -19,6 +19,26 @@
       "condition": {"typeReached": "joptsimple.internal.Reflection"},
       "type": "java.lang.Double",
       "methods": [{"name": "valueOf", "parameterTypes": ["java.lang.String"]}]
+    },
+    {
+      "condition": {"typeReached": "net.caffeinemc.mods.lithium.common.util.ChunkConstants"},
+      "type": "sun.misc.Unsafe",
+      "fields": [{"name": "theUnsafe"}]
+    },
+    {
+      "condition": {"typeReached": "net.caffeinemc.mods.lithium.common.util.ChunkConstants"},
+      "type": "net.minecraft.world.level.chunk.LevelChunk",
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.apache.logging.log4j.simple.internal.SimpleProvider",
+      "methods": [{"name": "<init>", "parameterTypes": []}]
+    },
+    {
+      "type": "net.caffeinemc.mods.sodium.client.data.fingerprint.HashedFingerprint",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true
     }
   ]
 }

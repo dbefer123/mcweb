@@ -146,12 +146,28 @@ struct C { color: vec4<f32>, depth: vec4<f32> }
     labels[id] = undefined;
   }
 
+  const OP_NAMES = Object.fromEntries(Object.entries(OP).map(([k, v]) => [v, k]));
+
   function exec(addr, count) {
     const buf = nmem.buffer;
     const w = new Int32Array(buf, addr, count);
     const f = new Float32Array(buf, addr, count);
     let p = 0;
-    while (p < count) {
+    let start = 0;
+    try {
+      while (p < count) {
+        start = p;
+        p = step(w, f, p);
+      }
+    } catch (e) {
+      const words = Array.from(w.subarray(start, Math.min(count, start + 16))).join(" ");
+      e.message = `webgpu ${OP_NAMES[w[start]] ?? w[start]} (word ${start}/${count}: ${words}): ${e.message}`;
+      throw e;
+    }
+  }
+
+  function step(w, f, p) {
+    {
       const op = w[p++];
       switch (op) {
         case OP.CREATE_BUFFER: {
@@ -468,6 +484,7 @@ struct C { color: vec4<f32>, depth: vec4<f32> }
           throw new Error(`webgpu: unknown opcode ${op} at ${p - 1}`);
       }
     }
+    return p;
   }
 
   function submit() {

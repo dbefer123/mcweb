@@ -167,10 +167,11 @@ final class WebGpuRenderPass implements RenderPassBackend {
             bindingsDirty = false;
         }
         if (pipeline.hasPushConstants() && pcDirty && pcOffset >= 0) {
+            int pcGroup = device.pushConstantBindGroup();
             WebGpu.begin(5);
             WebGpu.put(WebGpu.SET_BIND_GROUP);
             WebGpu.put(1);
-            WebGpu.put(device.pushConstantBindGroup());
+            WebGpu.put(pcGroup);
             WebGpu.put(1);
             WebGpu.put(pcOffset);
             pcDirty = false;

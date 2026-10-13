@@ -96,9 +96,20 @@ export async function createGlslang(wasm, log = (line) => console.log(`[glslang]
     return decoder.decode(heap.subarray(ptr, end));
   };
 
+  // shaderc enables these implicitly; renderpearl's sources rely on `#line N "file"`. They
+  // must follow #version (glslang puts the preamble before it), keeping line numbers.
+  const SHADERC_EXTENSIONS = "#extension GL_GOOGLE_cpp_style_line_directive : enable\n#extension GL_GOOGLE_include_directive : enable\n";
+  function withExtensions(source) {
+    const m = /^[ \t]*#[ \t]*version[^\n]*\n/m.exec(source);
+    if (!m) return SHADERC_EXTENSIONS + source;
+    const end = m.index + m[0].length;
+    const line = source.slice(0, end).split("\n").length; // number of the line after #version
+    return source.slice(0, end) + SHADERC_EXTENSIONS + `#line ${line}\n` + source.slice(end);
+  }
+
   return {
     compile(stage, source, preamble = "") {
-      const src = putString(source);
+      const src = putString(withExtensions(source));
       const pre = putString(preamble);
       try {
         const r = ex.gw_compile(stage, src, pre);

@@ -25,7 +25,9 @@
         "--mount",
         "/glslang=build/glslang-wasm",
         "--mount",
-        "/assets=C:\\Users\\Cade N\\AppData\\Roaming\\PrismLauncher\\assets"
+        "/assets=C:\\Users\\Cade N\\AppData\\Roaming\\PrismLauncher\\assets",
+        "--mount",
+        "/bundle=build/bundle"
       ],
       "port": 4173
     }

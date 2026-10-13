@@ -62,7 +62,7 @@ Error.stackTraceLimit = 200;
     const original = console[level].bind(console);
     console[level] = (...args) => {
       original(...args);
-      append(args.map(String).join(" "));
+      append(args.map((a) => (a instanceof Error ? a.stack || String(a) : String(a))).join(" "));
     };
   }
   // Mirror errors raised outside Java.
@@ -81,9 +81,18 @@ Error.stackTraceLimit = 200;
     const wasm = await (await fetch("glslang/glslang.wasm")).arrayBuffer();
     const glslang = await createGlslang(wasm, (line) => append(`[glslang] ${line}`));
     let last = null;
+    let debugShaders = 0;
     globalThis.mcweb.glsl = {
       compile(stage, source, preamble) {
         last = glslang.compile(stage, source, preamble);
+        if (!last.ok && debugShaders++ < 3) {
+          // Show the offending lines of the first few failures.
+          const m = /ERROR: \d+:(\d+):/.exec(last.log);
+          const lines = source.split("\n");
+          const at = m ? Number(m[1]) : 1;
+          append(`[glslang] failed source lines ${Math.max(1, at - 3)}-${at + 2} (preamble: ${JSON.stringify(preamble)}):\n`
+            + lines.slice(Math.max(0, at - 4), at + 2).map((l, i) => `${Math.max(1, at - 3) + i}: ${l}`).join("\n"));
+        }
         return last.ok ? last.spirv.length : -1;
       },
       take(nmem, addr) {
@@ -117,8 +126,17 @@ Error.stackTraceLimit = 200;
         files.push({ path, data });
       }
     }));
+    // Vanilla resources (the game jar's assets/ and data/), built by tools/build-image.mjs.
+    const res = await fetch("bundle/vanilla-resources.zip");
+    if (res.ok) {
+      const data = new Uint8Array(await res.arrayBuffer());
+      bytes += data.length;
+      files.push({ path: "resources/vanilla.zip", data });
+    } else {
+      append("[host] bundle/vanilla-resources.zip missing (run tools/build-image.mjs)");
+    }
     globalThis.mcweb.files = files;
-    append(`[host] staged ${files.length} asset objects (${(bytes / 1048576).toFixed(1)} MiB)`);
+    append(`[host] staged ${files.length} files (${(bytes / 1048576).toFixed(1)} MiB)`);
   }
 
   Promise.all([

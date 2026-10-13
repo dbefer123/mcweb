@@ -65,6 +65,21 @@ final class WebGpuCommandEncoder implements CommandEncoderBackend {
         GpuFormat[] colorFormats = new GpuFormat[colors.size()];
         int width = 0;
         int height = 0;
+        // Attachment views may be created on first use: do that before writing this command.
+        int[] colorViews = new int[colors.size()];
+        for (int i = 0; i < colors.size(); i++) {
+            RenderPassDescriptor.Attachment<Optional<Vector4fc>> a = colors.get(i);
+            if (a != null) {
+                WebGpuTextureView view = (WebGpuTextureView) a.textureView();
+                colorViews[i] = view.webTexture().attachmentView(view.baseMipLevel());
+            }
+        }
+        RenderPassDescriptor.Attachment<OptionalDouble> depth = descriptor.depthAttachment();
+        int depthView = 0;
+        if (depth != null) {
+            WebGpuTextureView view = (WebGpuTextureView) depth.textureView();
+            depthView = view.webTexture().attachmentView(view.baseMipLevel());
+        }
         WebGpu.begin(14 + colors.size() * 6);
         WebGpu.put(WebGpu.BEGIN_PASS);
         WebGpu.put(colors.size());
@@ -82,7 +97,7 @@ final class WebGpuCommandEncoder implements CommandEncoderBackend {
             colorFormats[i] = view.texture().getFormat();
             width = view.getWidth(0);
             height = view.getHeight(0);
-            WebGpu.put(view.webTexture().attachmentView(view.baseMipLevel()));
+            WebGpu.put(colorViews[i]);
             Optional<Vector4fc> clear = a.clearValue();
             WebGpu.put(clear.isPresent() ? 1 : 0);
             Vector4fc c = clear.orElse(null);
@@ -91,7 +106,6 @@ final class WebGpuCommandEncoder implements CommandEncoderBackend {
             WebGpu.putF(c == null ? 0f : c.z());
             WebGpu.putF(c == null ? 0f : c.w());
         }
-        RenderPassDescriptor.Attachment<OptionalDouble> depth = descriptor.depthAttachment();
         GpuFormat depthFormat = null;
         if (depth != null) {
             WebGpuTextureView view = (WebGpuTextureView) depth.textureView();
@@ -100,7 +114,7 @@ final class WebGpuCommandEncoder implements CommandEncoderBackend {
                 width = view.getWidth(0);
                 height = view.getHeight(0);
             }
-            WebGpu.put(view.webTexture().attachmentView(view.baseMipLevel()));
+            WebGpu.put(depthView);
             WebGpu.put(depth.clearValue().isPresent() ? 1 : 0);
             WebGpu.putF((float) depth.clearValue().orElse(0.0));
             WebGpu.put(depthFormat.hasStencilAspect() ? 1 : 0);
@@ -134,13 +148,15 @@ final class WebGpuCommandEncoder implements CommandEncoderBackend {
 
     /** A pass that only clears (loadOp clear) the given mip of a color and/or depth texture. */
     private void clearPass(WebGpuTexture color, Vector4fc clearColor, WebGpuTexture depth, double clearDepth, int mip) {
+        int colorView = color != null ? color.attachmentView(mip) : -1;
+        int depthView = depth != null ? depth.attachmentView(mip) : -1;
         WebGpu.begin(24);
         WebGpu.put(WebGpu.BEGIN_PASS);
         int w;
         int h;
         if (color != null) {
             WebGpu.put(1);
-            WebGpu.put(color.attachmentView(mip));
+            WebGpu.put(colorView);
             WebGpu.put(1);
             WebGpu.putF(clearColor.x());
             WebGpu.putF(clearColor.y());
@@ -154,7 +170,7 @@ final class WebGpuCommandEncoder implements CommandEncoderBackend {
             h = depth.getHeight(mip);
         }
         if (depth != null) {
-            WebGpu.put(depth.attachmentView(mip));
+            WebGpu.put(depthView);
             WebGpu.put(1);
             WebGpu.putF((float) clearDepth);
             WebGpu.put(depth.getFormat().hasStencilAspect() ? 1 : 0);
@@ -194,11 +210,13 @@ final class WebGpuCommandEncoder implements CommandEncoderBackend {
             int regionX, int regionY, int regionWidth, int regionHeight, int mipLevel) {
         WebGpuTexture c = (WebGpuTexture) colorTexture;
         WebGpuTexture d = (WebGpuTexture) depthTexture;
+        int colorView = c.attachmentView(mipLevel);
+        int depthView = d.attachmentView(mipLevel);
         WebGpu.begin(16);
         WebGpu.put(WebGpu.CLEAR_REGION);
-        WebGpu.put(c.attachmentView(mipLevel));
+        WebGpu.put(colorView);
         WebGpu.put(WebGpuEnums.format(c.getFormat()));
-        WebGpu.put(d.attachmentView(mipLevel));
+        WebGpu.put(depthView);
         WebGpu.put(WebGpuEnums.format(d.getFormat()));
         WebGpu.put(regionX);
         WebGpu.put(regionY);

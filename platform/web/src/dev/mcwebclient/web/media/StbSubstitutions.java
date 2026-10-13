@@ -113,6 +113,14 @@ public final class StbSubstitutions {
     }
 }
 
+/** stb's allocator hooks: nothing native to hook (the codec above allocates from nmem). */
+@TargetClass(className = "org.lwjgl.stb.LibSTB")
+final class Target_org_lwjgl_stb_LibSTB {
+    @Substitute
+    private static void setupMalloc(long malloc, long calloc, long realloc, long free, long alignedAlloc, long alignedFree) {
+    }
+}
+
 @TargetClass(org.lwjgl.stb.STBImage.class)
 final class Target_org_lwjgl_stb_STBImage {
     @Substitute

@@ -52,6 +52,17 @@ public final class WebRuntime {
         System.setProperty("user.home", ROOT.toString());
         System.setProperty("java.awt.headless", "true");
         System.setProperty("log4j2.formatMsgNoLookups", "true");
+        // JOML writes vectors/matrices into direct buffers with sun.misc.Unsafe at raw
+        // addresses, which Web Image traps; its NIO implementation goes through
+        // ScopedMemoryAccess, which reaches nmem (mem/ScopedMemoryAccessSubstitutions).
+        System.setProperty("joml.nounsafe", "true");
+        // Same for Netty's direct buffer fast paths.
+        System.setProperty("io.netty.noUnsafe", "true");
+        // Mods logging through log4j-api (log4j-core isn't in the image): its simple
+        // console provider instead of "could not find a logging provider".
+        setIfMissing("log4j.provider", "org.apache.logging.log4j.simple.internal.SimpleProvider");
+        setIfMissing("org.apache.logging.log4j.simplelog.level", "INFO");
+        setIfMissing("org.apache.logging.log4j.simplelog.logFile", "system.out");
         long scratch = dev.mcwebclient.web.mem.NativeHeap.malloc(64);
         dev.mcwebclient.web.mem.Nmem.selfCheck(scratch);
         dev.mcwebclient.web.mem.NativeHeap.free(scratch);

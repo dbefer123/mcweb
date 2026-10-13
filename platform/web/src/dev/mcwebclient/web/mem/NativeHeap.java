@@ -27,8 +27,21 @@ public final class NativeHeap {
 
     private static final long[][] freeStacks = new long[MAX_CLASS_SHIFT - MIN_CLASS_SHIFT + 1][];
     private static final int[] freeCounts = new int[MAX_CLASS_SHIFT - MIN_CLASS_SHIFT + 1];
-    /** slab base -> size-class index */
-    private static final Map<Long, Integer> slabs = new HashMap<>();
+
+    /** A slab of one size class, with a bitmap of allocated slots. */
+    private static final class Slab {
+        final int cls;
+        final long[] used;
+
+        Slab(int cls) {
+            this.cls = cls;
+            this.used = new long[(int) ((SLAB >> (cls + MIN_CLASS_SHIFT)) + 63) / 64];
+        }
+    }
+
+    /** slab base -> slab */
+    private static final Map<Long, Slab> slabs = new HashMap<>();
+    private static int badFrees;
     /** free large ranges: address -> size, and size -> addresses */
     private static final TreeMap<Long, Long> freeByAddr = new TreeMap<>();
     private static final TreeMap<Long, TreeSet<Long>> freeBySize = new TreeMap<>();
@@ -110,12 +123,29 @@ public final class NativeHeap {
             addFree(addr, size);
             return;
         }
-        Integer cls = slabs.get(addr & ~(SLAB - 1));
-        if (cls == null) {
-            throw new IllegalArgumentException("free of unknown address " + addr);
+        long base = addr & ~(SLAB - 1);
+        Slab slab = slabs.get(base);
+        if (slab == null) {
+            badFree("free of unknown address", addr);
+            return;
         }
+        int cls = slab.cls;
+        long offset = addr - base;
+        int slot = (int) (offset >> (cls + MIN_CLASS_SHIFT));
+        if ((offset & ((1L << (cls + MIN_CLASS_SHIFT)) - 1)) != 0 || (slab.used[slot >> 6] & (1L << slot)) == 0) {
+            // A double free would hand the block to two owners later: report and ignore.
+            badFree("double free or interior pointer", addr);
+            return;
+        }
+        slab.used[slot >> 6] &= ~(1L << slot);
         liveBytes -= 1L << (cls + MIN_CLASS_SHIFT);
         push(cls, addr);
+    }
+
+    private static void badFree(String what, long addr) {
+        if (badFrees++ < 20) {
+            new IllegalStateException("NativeHeap: " + what + " 0x" + Long.toHexString(addr)).printStackTrace();
+        }
     }
 
     public static synchronized long realloc(long addr, long size) {
@@ -142,11 +172,11 @@ public final class NativeHeap {
         if (size != null) {
             return size;
         }
-        Integer cls = slabs.get(addr & ~(SLAB - 1));
-        if (cls == null) {
+        Slab slab = slabs.get(addr & ~(SLAB - 1));
+        if (slab == null) {
             throw new IllegalArgumentException("unknown address " + addr);
         }
-        return 1L << (cls + MIN_CLASS_SHIFT);
+        return 1L << (slab.cls + MIN_CLASS_SHIFT);
     }
 
     public static synchronized long liveBytes() {
@@ -171,13 +201,18 @@ public final class NativeHeap {
     private static long mallocSmall(int cls) {
         if (freeCounts[cls] == 0) {
             long slab = allocLarge(SLAB, SLAB);
-            slabs.put(slab, cls);
+            slabs.put(slab, new Slab(cls));
             long block = 1L << (cls + MIN_CLASS_SHIFT);
             for (long a = slab + SLAB - block; a >= slab; a -= block) {
                 push(cls, a);
             }
         }
-        return freeStacks[cls][--freeCounts[cls]];
+        long addr = freeStacks[cls][--freeCounts[cls]];
+        long base = addr & ~(SLAB - 1);
+        Slab slab = slabs.get(base);
+        int slot = (int) ((addr - base) >> (cls + MIN_CLASS_SHIFT));
+        slab.used[slot >> 6] |= 1L << slot;
+        return addr;
     }
 
     private static void push(int cls, long addr) {

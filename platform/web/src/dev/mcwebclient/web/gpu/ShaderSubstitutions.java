@@ -95,6 +95,19 @@ final class ShaderSubstitutions {
     private static native String glslLog();
 }
 
+/**
+ * Include sources live in native memory (shaderc's include-result struct). Minecraft can
+ * read them after closing them (the UI preload's fallback pipeline cache): harmless with
+ * desktop malloc, but nmem's allocator reuses freed blocks at once and the text got
+ * overwritten. Includes are a few KB per resource reload, so they are never freed.
+ */
+@TargetClass(com.mojang.renderpearl.api.pipeline.ShaderSource.CachedIncludeSource.class)
+final class Target_com_mojang_renderpearl_api_pipeline_ShaderSource_CachedIncludeSource {
+    @Substitute
+    public void close() {
+    }
+}
+
 @TargetClass(com.mojang.renderpearl.frontend.shaders.GlslCompiler.class)
 final class Target_com_mojang_renderpearl_frontend_shaders_GlslCompiler {
     @Alias private boolean isZeroToOne;

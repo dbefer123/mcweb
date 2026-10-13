@@ -84,6 +84,14 @@ writeFileSync(join(webfs, "index.txt"), index.join("\n") + "\n");
 cpSync(join(ROOT, "platform", "web", "resources"), res, { recursive: true });
 console.log(`staged ${index.length} embedded files`);
 
+// 2b. Game bundle part: vanilla resources as a zip the page provides at /root/resources/vanilla.zip.
+const resourceZip = join(BUILD, "bundle", "vanilla-resources.zip");
+const bakedGame = join(BUILD, "baked", "minecraft-baked.jar");
+if (!existsSync(resourceZip) || statSync(resourceZip).mtimeMs < statSync(bakedGame).mtimeMs) {
+  run(join(GRAALVM_HOME, "bin", process.platform === "win32" ? "java.exe" : "java"),
+    [join(ROOT, "tools", "bundle", "ResourceZip.java"), bakedGame, resourceZip]);
+}
+
 // 3. Compile the web platform layer.
 const classes = join(IMG, "classes");
 rmSync(classes, { recursive: true, force: true });
@@ -153,7 +161,11 @@ const disable = [
 ];
 const resources = [
   "webfs/.*",
-  "assets/.*", "data/.*", "pack\\.mcmeta", "pack\\.png", "version\\.json", "flightrecorder-config\\.jfc",
+  // Vanilla assets/data come from the bundle zip (build/bundle/vanilla-resources.zip, mounted by
+  // mc/ResourceSubstitutions); mods read theirs from their jars, some also via the class path.
+  "assets/(?!minecraft/).*", "data/(?!minecraft/).*", "pack\\.mcmeta", "pack\\.png", "version\\.json", "flightrecorder-config\\.jfc",
+  // Read from the class path directly (Language.loadDefault, DeprecatedTranslationsInfo).
+  "assets/minecraft/lang/en_us\\.json", "assets/minecraft/lang/deprecated\\.json",
   "META-INF/services/.*",
 ];
 const parallelism = (argv.find((a) => a.startsWith("--parallelism=")) || "--parallelism=4").slice(14);

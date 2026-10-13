@@ -238,4 +238,33 @@ Shader path (desktop renderpearl: shaderc for GLSL→SPIR-V, SPIRV-Cross for ref
 - Build: Mixin's ServiceLoader services excluded (`MixinServiceLaunchWrapper` broke compilation).
 
 First run with the backend: device + window created, then OpenAL's `dlopen` (fixed by the audio
-stub). Next: title screen.
+stub). Further fixes on the way to the title screen:
+- Rendering code is now reachable → image 177 MiB wasm, WAT 3.2 GB → `-H:WasmComments=NONE`,
+  builder `--xmx=12g` (peak RSS ~12 GiB; close the game tab while building).
+- Web Image miscompiles a `MethodHandle.invokeExact` result (missing cast → invalid Wasm) in
+  Sodium's `SimpleFrustum` → class substituted with plain field access (`@Alias` JOML planes).
+- Off-heap `Unsafe` (Web Image traps it): JOML → `-Djoml.nounsafe=true` (NIO path),
+  Netty → `io.netty.noUnsafe`, Sodium `MemoryIntrinsics` → nmem, Lithium `ChunkConstants`
+  (`allocateInstance` via reflective `theUnsafe`) → reflection metadata for `Unsafe.theUnsafe`
+  + `unsafeAllocated` for `LevelChunk` (a class-level substitution with a static initializer
+  doesn't work: substitution classes are initialized at build time). A scan of all image jars found no other raw-address users (Guava/lz4 are on-heap).
+- `LibSTB.setupMalloc` (STB's native allocator hook) → no-op.
+- Command stream bug: a lazily created object (attachment view, push-constant layout) emitted
+  its create command *inside* another command → resolve ids before `WebGpu.begin`.
+- Vanilla resources: Web Image's `resource:` paths (`/8!/assets/...`) only resolve the probe file
+  → the bundle now has `build/bundle/vanilla-resources.zip` (game jar `assets/` + `data/`,
+  `tools/bundle/ResourceZip.java`), the page provides it as `/root/resources/vanilla.zip`, and
+  `VanillaPackResourcesBuilder.pushJarResources` mounts it with zipfs. Vanilla `assets/minecraft`
+  and `data/minecraft` are no longer embedded in the image.
+- Dev page: errors print with stacks; `webgpu.js` names the failing opcode and stream words.
+
+- **First frames:** the Mojang loading screen renders in the browser through the WebGPU backend
+  (2026-10-13). The frame pump runs; shaders compile through glslang wasm (needs
+  `GL_GOOGLE_cpp_style_line_directive` after `#version`, as shaderc enables it implicitly).
+- Include text corruption: Minecraft can read shader include sources after closing them; with
+  nmem reusing freed blocks immediately the text was overwritten by I/O buffers → include
+  sources are never freed. `NativeHeap` now detects double/invalid frees (slot bitmaps), logs
+  them with a stack and ignores them.
+- `log4j-api` users get its SimpleProvider (console) instead of no provider.
+
+Next: title screen.

@@ -4,12 +4,88 @@ import com.oracle.svm.core.annotate.Alias;
 import com.oracle.svm.core.annotate.Substitute;
 import com.oracle.svm.core.annotate.TargetClass;
 
+import dev.mcwebclient.web.mem.Nmem;
 import org.joml.FrustumIntersection;
 import org.joml.Vector4f;
 
 /** Sodium code the WasmGC image can't compile as written. */
 final class SodiumSubstitutions {
     private SodiumSubstitutions() {
+    }
+}
+
+/**
+ * Sodium's raw memory access (vertex writing redirected from BufferBuilder, chunk
+ * meshing) uses sun.misc.Unsafe at absolute addresses, which Web Image traps.
+ * Native memory is nmem here.
+ */
+@Substitute
+@TargetClass(className = "net.caffeinemc.mods.sodium.api.memory.MemoryIntrinsics")
+final class Target_net_caffeinemc_mods_sodium_api_memory_MemoryIntrinsics {
+    @Substitute
+    public static void copyMemory(long src, long dst, int length) {
+        Nmem.copy(src, dst, length);
+    }
+
+    @Substitute
+    public static void putInt(long ptr, int value) {
+        Nmem.putInt(ptr, value);
+    }
+
+    @Substitute
+    public static void putFloat(long ptr, float value) {
+        Nmem.putFloat(ptr, value);
+    }
+
+    @Substitute
+    public static void putLong(long ptr, long value) {
+        Nmem.putLong(ptr, value);
+    }
+
+    @Substitute
+    public static void putShort(long ptr, short value) {
+        Nmem.putShort(ptr, value);
+    }
+
+    @Substitute
+    public static void putByte(long ptr, byte value) {
+        Nmem.putByte(ptr, value);
+    }
+
+    @Substitute
+    public static int getInt(long ptr) {
+        return Nmem.getInt(ptr);
+    }
+
+    @Substitute
+    public static float getFloat(long ptr) {
+        return Nmem.getFloat(ptr);
+    }
+
+    @Substitute
+    public static long getLong(long ptr) {
+        return Nmem.getLong(ptr);
+    }
+
+    @Substitute
+    public static short getShort(long ptr) {
+        return Nmem.getShort(ptr);
+    }
+
+    @Substitute
+    public static byte getByte(long ptr) {
+        return Nmem.getByte(ptr);
+    }
+
+    /** Pointers are 64-bit in the LWJGL ABI the image emulates. */
+    @Substitute
+    public static void putAddress(long ptr, long address) {
+        Nmem.putLong(ptr, address);
+    }
+
+    @Substitute
+    public static long getAddress(long ptr) {
+        return Nmem.getLong(ptr);
     }
 }
 

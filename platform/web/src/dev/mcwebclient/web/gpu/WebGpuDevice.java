@@ -344,18 +344,23 @@ public final class WebGpuDevice implements GpuDeviceBackend {
 
     int pipelineLayout(int layout0, boolean pushConstants) {
         String key = "pl:" + layout0 + ":" + pushConstants;
-        return layouts.computeIfAbsent(key, k -> {
-            int id = WebGpu.newId();
-            WebGpu.begin(5);
-            WebGpu.put(WebGpu.CREATE_PIPELINE_LAYOUT);
-            WebGpu.put(id);
-            WebGpu.put(pushConstants ? 2 : 1);
-            WebGpu.put(layout0);
-            if (pushConstants) {
-                WebGpu.put(pushConstantLayout());
-            }
-            return id;
-        });
+        Integer existing = layouts.get(key);
+        if (existing != null) {
+            return existing;
+        }
+        // Dependencies first: a command must never be written in the middle of another.
+        int pcLayoutId = pushConstants ? pushConstantLayout() : 0;
+        int id = WebGpu.newId();
+        WebGpu.begin(5);
+        WebGpu.put(WebGpu.CREATE_PIPELINE_LAYOUT);
+        WebGpu.put(id);
+        WebGpu.put(pushConstants ? 2 : 1);
+        WebGpu.put(layout0);
+        if (pushConstants) {
+            WebGpu.put(pcLayoutId);
+        }
+        layouts.put(key, id);
+        return id;
     }
 
     private int pushConstantLayout() {
@@ -376,11 +381,12 @@ public final class WebGpuDevice implements GpuDeviceBackend {
 
     int pushConstantBindGroup() {
         if (pcBindGroup == 0) {
+            int layout = pushConstantLayout();
             pcBindGroup = WebGpu.newId();
             WebGpu.begin(9);
             WebGpu.put(WebGpu.CREATE_BIND_GROUP);
             WebGpu.put(pcBindGroup);
-            WebGpu.put(pushConstantLayout());
+            WebGpu.put(layout);
             WebGpu.put(1);
             WebGpu.put(0);
             WebGpu.put(0);

@@ -23,7 +23,9 @@
         "--mount",
         "/corpus=build/shader-corpus",
         "--mount",
-        "/glslang=build/glslang-wasm"
+        "/glslang=build/glslang-wasm",
+        "--mount",
+        "/assets=C:\\Users\\Cade N\\AppData\\Roaming\\PrismLauncher\\assets"
       ],
       "port": 4173
     }

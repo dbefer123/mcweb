@@ -201,6 +201,41 @@ Shader path (desktop renderpearl: shaderc for GLSL→SPIR-V, SPIRV-Cross for ref
   20-byte push constants, R32_SINT texel buffer, attribute formats RG32_UINT/RGBA8_UNORM/RG16_UINT/
   RGBA8_UINT. Sodium 0.9 has `GLDrawContext` and `VKDrawContext` (backend-specific draw paths).
 
-Next: WebGPU `GpuDeviceBackend` (device, buffers, textures, samplers, command encoder, render
-pass, pipelines with explicit layouts, surface on the canvas), `GlslCompiler` substitution calling
-glslang wasm, then the title screen.
+**WebGPU backend** (`platform/web/.../gpu/`, host `web/dev/webgpu.js`):
+- Command stream: Java appends int32 commands to a 4 MiB stream in nmem (`WebGpu`), JS decodes
+  them per flush; object ids are allocated in Java. Strings (WGSL, labels) go through direct
+  `@JS` calls. Flushes happen at submit, when full, and right after commands that read caller
+  memory (multi-draw parameter arrays, temp uploads).
+- Buffers: mappable buffers keep an nmem shadow; write mappings upload the mapped range on close
+  (host-visible semantics); read mappings return the shadow, filled by readbacks
+  (`copyTextureToBuffer` → padded staging → `mapAsync` → unpadded into the shadow → callback run
+  from the frame pump). Fences complete immediately (queue order).
+- Transient memory: renderpearl's `TransientBlockAllocator` with GPU blocks + nmem shadows;
+  written ranges uploaded right before submit; blocks reused immediately (queue order).
+- Uploads stay in command order: staging + encoder copies; `writeToTexture` repacks rows to the
+  256-byte pitch in Java; `copyBufferToTexture` with unaligned pitch → per-row copies.
+- Pipelines: SPIR-V → WGSL at `compilePipeline`; GPU pipelines created lazily per variant
+  (attachment formats + mask of bound textures that are unfilterable, which become
+  `unfilterable-float` + a nearest twin sampler). Front face `cw` (framebuffer layout = Vulkan).
+  Bind groups cached by resources and dropped when a resource is destroyed or unused for long.
+  Push constants: 256-byte slots in a storage ring, dynamic offsets (group 1).
+- QUADS/LINES/TRIANGLES → triangle-list, fans → shared fan index buffer, multi-draw variants and
+  indirect draws expanded by the host. Region clears use an internal pipeline; full clears use
+  load-op passes. Present = blit into the canvas texture with a Y flip (as Vulkan's blit).
+- Device features reported: multi-draw (both forms), indirect, no wireframe, no shader draw
+  parameters, no persistent mapping. Sodium sees a non-Vulkan device → its GL draw path
+  (`multiDrawIndexed` with separate arrays), which the host expands.
+- `GlslCompiler.compileToSpv` substituted: includes expanded like shaderc's resolver, defines as a
+  preamble, glslang wasm via `mcweb.glsl`; returns `WebSpvModule` (Java reflection).
+- Images: `NativeImage` uses stb_image/stb_image_write/stb_image_resize natives → substituted
+  with a Java PNG codec (`media/PngCodec`, matches stb on all 3,965 game PNGs incl. 1/4-bit gray;
+  ImageIO differs only by gamma on gray) + bilinear resize.
+- Audio stubbed (OpenAL absent → "Turning off sounds & music") until Phase 7;
+  `FramerateLimiter` → frame pump skips animation frames instead of sleeping.
+- Dev assets: the dev server mounts Prism's `assets/`; the page stages non-sound, non-language
+  asset objects (pack.mcmeta, panorama, unifont, icons, bundled packs) and `WebRuntime` copies
+  page-provided files (`mcweb.files`) into the VFS at boot.
+- Build: Mixin's ServiceLoader services excluded (`MixinServiceLaunchWrapper` broke compilation).
+
+First run with the backend: device + window created, then OpenAL's `dlopen` (fixed by the audio
+stub). Next: title screen.

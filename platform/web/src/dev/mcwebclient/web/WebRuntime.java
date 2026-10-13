@@ -60,11 +60,63 @@ public final class WebRuntime {
         Files.createDirectories(LOADER_DIR);
         Files.createDirectories(Path.of(System.getProperty("java.home")));
         int files = unpackEmbedded();
+        int hostFiles = importHostFiles();
         try (var s = Files.list(LOADER_DIR)) {
             fabricLoaderJar = s.filter(p -> p.getFileName().toString().startsWith("fabric-loader")).findFirst().orElse(null);
         }
-        WebJs.log("[web] boot: unpacked " + files + " embedded files; loader jar " + fabricLoaderJar);
+        WebJs.log("[web] boot: unpacked " + files + " embedded files, " + hostFiles + " files from the page; loader jar " + fabricLoaderJar);
     }
+
+    /**
+     * Copies files the page prepared before starting the image (globalThis.mcweb.files:
+     * {path relative to /root, data: Uint8Array}) into the virtual file system, e.g.
+     * asset objects. The page drops its copies afterwards.
+     */
+    private static int importHostFiles() throws IOException {
+        int n = hostFileCount();
+        for (int i = 0; i < n; i++) {
+            String rel = hostFileName(i);
+            int size = hostFileSize(i);
+            byte[] data = new byte[size];
+            if (size > 0) {
+                long tmp = dev.mcwebclient.web.mem.NativeHeap.malloc(size);
+                try {
+                    hostFileCopy(i, (int) tmp);
+                    dev.mcwebclient.web.mem.Nmem.copyToBytes(tmp, data, 0, size);
+                } finally {
+                    dev.mcwebclient.web.mem.NativeHeap.free(tmp);
+                }
+            }
+            Path target = ROOT.resolve(rel).normalize();
+            if (!target.startsWith(ROOT)) {
+                continue;
+            }
+            Files.createDirectories(target.getParent());
+            Files.write(target, data);
+        }
+        hostFilesDone();
+        return n;
+    }
+
+    @org.graalvm.webimage.api.JS.Coerce
+    @org.graalvm.webimage.api.JS(value = "return globalThis.mcweb?.files?.length ?? 0;", args = {})
+    private static native int hostFileCount();
+
+    @org.graalvm.webimage.api.JS.Coerce
+    @org.graalvm.webimage.api.JS(value = "return globalThis.mcweb.files[i].path;", args = {"i"})
+    private static native String hostFileName(int i);
+
+    @org.graalvm.webimage.api.JS.Coerce
+    @org.graalvm.webimage.api.JS(value = "return globalThis.mcweb.files[i].data.length;", args = {"i"})
+    private static native int hostFileSize(int i);
+
+    @org.graalvm.webimage.api.JS.Coerce
+    @org.graalvm.webimage.api.JS(value = "new Uint8Array(getExport('nmem').buffer, addr >>> 0, globalThis.mcweb.files[i].data.length).set(globalThis.mcweb.files[i].data);",
+            args = {"i", "addr"})
+    private static native void hostFileCopy(int i, int addr);
+
+    @org.graalvm.webimage.api.JS(value = "if (globalThis.mcweb) globalThis.mcweb.files = null;", args = {})
+    private static native void hostFilesDone();
 
     private static void setIfMissing(String key, String value) {
         String current = System.getProperty(key);

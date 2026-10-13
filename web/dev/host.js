@@ -70,8 +70,65 @@ Error.stackTraceLimit = 200;
   addEventListener("unhandledrejection", (e) => append(`[host] unhandled: ${e.reason}`));
 
   requestAnimationFrame(loop);
-  const script = document.createElement("script");
-  script.src = "image/minecraft.js";
-  script.onerror = () => append("[host] could not load image/minecraft.js (build it with tools/build-image.mjs)");
-  document.body.appendChild(script);
+
+  // The game creates its renderer synchronously, so WebGPU and the GLSL compiler
+  // (glslang.wasm, see tools/glslang-wasm) are set up before the image starts.
+  async function initGraphics() {
+    const [{ initWebGpu, createGpuHost }, { createGlslang }] = await Promise.all([import("./webgpu.js"), import("./glslang.js")]);
+    const { adapter, device } = await initWebGpu();
+    globalThis.mcweb.gpu = createGpuHost({ device, adapter, canvas: globalThis.mcweb.canvas, log: append });
+    append(`[host] WebGPU: ${adapter.info?.vendor ?? "?"} ${adapter.info?.architecture ?? ""} (${[...device.features].join(", ")})`);
+    const wasm = await (await fetch("glslang/glslang.wasm")).arrayBuffer();
+    const glslang = await createGlslang(wasm, (line) => append(`[glslang] ${line}`));
+    let last = null;
+    globalThis.mcweb.glsl = {
+      compile(stage, source, preamble) {
+        last = glslang.compile(stage, source, preamble);
+        return last.ok ? last.spirv.length : -1;
+      },
+      take(nmem, addr) {
+        new Uint32Array(nmem.buffer, addr, last.spirv.length).set(last.spirv);
+      },
+      lastLog() {
+        return last?.log ?? "";
+      },
+    };
+  }
+
+  // Development: asset objects the game reads from disk (vanilla pack metadata, title
+  // panorama, unifont, icons, bundled resource packs) come from the local Prism assets
+  // folder (dev server mount /assets). Sounds and extra languages are left out for now.
+  async function loadAssets() {
+    const index = await (await fetch("assets/indexes/34.json")).json();
+    const wanted = Object.entries(index.objects).filter(([name]) =>
+      !name.startsWith("minecraft/sounds/") && !name.startsWith("minecraft/music/")
+      && !(name.startsWith("minecraft/lang/") || name.startsWith("realms/lang/")) || name.endsWith("/en_us.json"));
+    const files = [];
+    let bytes = 0;
+    const queue = [...wanted];
+    await Promise.all(Array.from({ length: 16 }, async () => {
+      while (queue.length) {
+        const [, { hash }] = queue.shift();
+        const path = `assets/objects/${hash.slice(0, 2)}/${hash}`;
+        const res = await fetch(path);
+        if (!res.ok) continue;
+        const data = new Uint8Array(await res.arrayBuffer());
+        bytes += data.length;
+        files.push({ path, data });
+      }
+    }));
+    globalThis.mcweb.files = files;
+    append(`[host] staged ${files.length} asset objects (${(bytes / 1048576).toFixed(1)} MiB)`);
+  }
+
+  Promise.all([
+    initGraphics().catch((e) => append(`[host] graphics init failed: ${e.message}`)),
+    loadAssets().catch((e) => append(`[host] asset staging failed: ${e.message}`)),
+  ])
+    .finally(() => {
+      const script = document.createElement("script");
+      script.src = "image/minecraft.js";
+      script.onerror = () => append("[host] could not load image/minecraft.js (build it with tools/build-image.mjs)");
+      document.body.appendChild(script);
+    });
 })();

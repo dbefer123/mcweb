@@ -3,6 +3,7 @@ package dev.mcwebclient.web.mc;
 import com.mojang.blaze3d.systems.RenderSystem;
 
 import dev.mcwebclient.web.WebJs;
+import dev.mcwebclient.web.gpu.WebGpu;
 import dev.mcwebclient.web.exec.WebScheduler;
 import net.minecraft.client.Minecraft;
 
@@ -19,6 +20,9 @@ public final class FramePump {
     private static Target_net_minecraft_client_Minecraft game;
     private static boolean stopped;
     private static long frames;
+    /** Minecraft's current frame rate cap (FramerateLimiter); 260+ means uncapped. */
+    private static int framerateLimit = 260;
+    private static long lastTickNanos;
 
     private FramePump() {
     }
@@ -36,10 +40,17 @@ public final class FramePump {
         }
         try {
             WebScheduler.pumpFrame(BACKGROUND_BUDGET_NANOS);
+            WebGpu.pollReadbacks();
             if (!game.running) {
                 stop();
                 return;
             }
+            // Honor the frame rate cap by skipping animation frames (1 ms early is fine).
+            long now = System.nanoTime();
+            if (framerateLimit < 260 && now - lastTickNanos < 1_000_000_000L / framerateLimit - 1_000_000L) {
+                return;
+            }
+            lastTickNanos = now;
             // One iteration of the original loop body (profiling/metrics omitted).
             RenderSystem.pollEvents(game.sdlEventHandler);
             game.runTick(true);
@@ -50,6 +61,10 @@ public final class FramePump {
             stopped = true;
             WebJs.exit(1);
         }
+    }
+
+    static void setFramerateLimit(int limit) {
+        framerateLimit = Math.max(1, limit);
     }
 
     private static void stop() {

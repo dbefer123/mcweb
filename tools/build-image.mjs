@@ -170,9 +170,22 @@ const niArgs = [
   "--add-exports=java.base/jdk.internal.foreign=ALL-UNNAMED",
   ...(process.platform === "win32" ? [`-J--patch-module=org.graalvm.nativeimage.pointsto=${pointstoPatch}`] : []),
   "-H:+DebugNames",
+  // Comments double the WAT text (~3 GB) that watpatch and wasm-as stream; the binary is unaffected.
+  "-H:WasmComments=NONE",
   "-H:+ReportExceptionStackTraces",
   `-H:WasmAsPath=${join(ROOT, "tools", "watpatch", "wasm-as.cmd")}`,
   ...disable.map((d) => `-H:DisableSubstitution=${d}`),
+  // Mixin is baked, never run: its launcher/tooling services (LaunchWrapper, ModLauncher,
+  // annotation processors) reference classes that aren't in the image.
+  `-H:ServiceLoaderFeatureExcludeServices=${[
+    "org.spongepowered.asm.service.IMixinService",
+    "org.spongepowered.asm.service.IMixinServiceBootstrap",
+    "org.spongepowered.asm.service.IGlobalPropertyService",
+    "org.spongepowered.tools.obfuscation.service.IObfuscationService",
+    "cpw.mods.modlauncher.api.ITransformationService",
+    "cpw.mods.modlauncher.serviceapi.ILaunchPluginService",
+    "javax.annotation.processing.Processor",
+  ].join(",")}`,
   ...resources.map((r) => `-H:IncludeResources=${r}`),
   ...(argv.includes("--no-trace-config") ? [] : [`-H:ConfigurationFileDirectories=${reflectDir}`]),
   // Netty's bundled config creates SLF4J loggers at build time, so our logger types

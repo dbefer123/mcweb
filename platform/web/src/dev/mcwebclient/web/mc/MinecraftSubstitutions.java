@@ -66,6 +66,18 @@ final class Target_net_minecraft_client_Minecraft {
 }
 
 /**
+ * The desktop limiter sleeps/spins until the next frame is due. The browser already
+ * paces frames with requestAnimationFrame; the frame pump skips callbacks instead.
+ */
+@TargetClass(net.minecraft.client.FramerateLimiter.class)
+final class Target_net_minecraft_client_FramerateLimiter {
+    @Substitute
+    public static void limitDisplayFPS(int framerateLimit) {
+        FramePump.setFramerateLimit(framerateLimit);
+    }
+}
+
+/**
  * Minecraft pre-loads LWJGL's native libraries (FreeType, OpenGL, STB, SDL, OpenAL, Vulkan)
  * at startup to fail early. In the browser there are none: each binding that is used is
  * substituted instead (see sdl/, mem/), so this is a no-op.

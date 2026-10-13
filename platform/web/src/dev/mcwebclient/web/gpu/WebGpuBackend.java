@@ -4,10 +4,11 @@ import com.mojang.renderpearl.api.device.BackendCreationException;
 import com.mojang.renderpearl.api.device.GpuBackend;
 import com.mojang.renderpearl.api.device.GpuDebugOptions;
 import com.mojang.renderpearl.api.device.GpuDevice;
+import com.mojang.renderpearl.frontend.FrontendGpuDevice;
 
 /**
- * Renderpearl backend for the browser. Phase 2 stub: device creation is not
- * implemented yet; the WebGPU device backend arrives in Phase 3.
+ * renderpearl backend for the browser: the page's WebGPU device (created by the host
+ * before the game starts) behind renderpearl's frontend, like the Vulkan backend.
  */
 public final class WebGpuBackend implements GpuBackend {
     /** The canvas is the one and only window. */
@@ -19,7 +20,10 @@ public final class WebGpuBackend implements GpuBackend {
     }
 
     @Override
-    public void loadLibrary() {
+    public void loadLibrary() throws BackendCreationException {
+        if (!WebGpu.available()) {
+            throw new BackendCreationException("The page has no WebGPU device", BackendCreationException.Reason.PLATFORM_ERROR);
+        }
     }
 
     @Override
@@ -33,7 +37,6 @@ public final class WebGpuBackend implements GpuBackend {
 
     @Override
     public GpuDevice createDevice(GpuDebugOptions debugOptions) throws BackendCreationException {
-        throw new BackendCreationException("WebGPU device backend not implemented yet (Phase 3)",
-                BackendCreationException.Reason.PLATFORM_ERROR);
+        return new FrontendGpuDevice(WebGpuDevice.create());
     }
 }

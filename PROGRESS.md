@@ -10,8 +10,8 @@ rendered with WebGPU, singleplayer in a Worker, multiplayer through a WebSocket�
 |---|---|
 | 0. Toolchain spike | **Done: go** (2026-10-12) |
 | 1. Inputs + Fabric baker + desktop checkpoint | **Done** (2026-10-12) — local-server join deferred to Phase 5 |
-| 2. Headless image | Next |
-| 3. Rendering + input | — |
+| 2. Headless image | **Nearly done**: boots through Fabric, Bootstrap, all mod entrypoints and the Minecraft constructor up to graphics-backend creation |
+| 3. Rendering + input | **In progress**: glslang→wasm done, SPIR-V reflection + SPIR-V→WGSL translator done (393/393 corpus pipelines translate; 392 validated in Chrome, last one was a test-page bug), WebGPU device backend next |
 | 4. Singleplayer | — |
 | 5. Multiplayer | — |
 | 6. Microsoft sign-in | — |
@@ -134,4 +134,73 @@ Findings:
   (analysis OOMed at 9 GB with default threads).
 - EntityCulling bundles shaded Sentry (`dev.tr7zw.lib.sentry`); make sure it can't report.
 
-Next: get the image through analysis/compile; then SDL emulation, WebGPU backend (Phase 3).
+Later Phase 2 findings (the image builds in ~5 min, ~122 MiB wasm, peak ~5.5 GiB):
+- **Boxing caches.** The WasmGC backend lowers boxing with an "AllocatingBox" that skips the JLS
+  caches, so `Integer.valueOf(0) != Integer.valueOf(0)`. Minecraft compares block-state property
+  values with `==` (FerriteCore re-boxes them): FireBlock/RedstoneWireBlock got null shapes and
+  Lithium NPE'd. Fix: `jdk/BoxCache` (`@NeverInline` helpers returning the JDK cache arrays) +
+  WAT patches routing `$func.box.*` to them. `tools/watpatch` `@require` fails the build if a
+  patched function is missing. `BoxCache.selfCheck()` must use opaque arguments, otherwise the
+  analysis folds the helpers to "return one constant".
+- **Concurrency.** `ForkJoinPool.submit`/`ForkJoinTask.fork` → `quietlyInvoke` (Fabric mod
+  discovery waits on them); `ThreadPoolExecutor.execute` and `ScheduledThreadPoolExecutor` →
+  `WebScheduler` (DataFixers optimize pool). Float/double `VarHandle` CAS can't be lowered by the
+  WasmGC backend → UOE substitutions.
+- **pointsto patch** (`tools/pointsto-patch`): retargets one branch in `TypeFlowSimplifier` that
+  asserts "@Delete methods should have a single callee" (Minecraft code hits it). Applied with
+  `-J--patch-module=org.graalvm.nativeimage.pointsto=…`.
+- **Reflection metadata** is filtered from the desktop trace (game/mod packages only, no array
+  types — raw array entries caused `Feature[] cannot be cast to Enum[]`), plus jopt-simple's
+  `valueOf` constructors and `net.fabricmc.loader.Messages`.
+- **Logging.** `LogUtils.getLogger()` uses `StackWalker.getCallerClass` → names loggers from the
+  JS stack instead (`CallerNames`).
+- **Fabric entrypoints** (`Class::method`) are built with `MethodHandleProxies` = runtime class
+  definition → unsupported. The baker now generates `build/baked/gen-src/.../BakedEntrypoints.java`
+  (`EntrypointTable`, ASM-checked access) and `DefaultLanguageAdapter.create` reads it (40/40 baked).
+- **Mod threads.** EntityCulling's `CullThread` loops forever with `sleep` → `CullTask.run`
+  substituted with one pass, re-run every `sleepDelay` ms by `WebThreads`. Sodium's chunk builder
+  starts worker threads when a world loads → still to do (Phase 4). Transition has an April-1-only
+  "godmode" code with a looping thread (harmless).
+- **Other substitutions:** EntityCulling's Sentry (`SentryInstance` shadow class, no-op);
+  `SystemReport` hardware/software via OSHI → static text; `ManagementFactory` GC/memory/runtime
+  beans (Web Image has none); `NativeLibrariesBootstrap` no-op; `ClientBootstrap` skips
+  `VulkanFeatureSets` (reflective probes); LWJGL callbacks without libffi (`Upcalls` replaced by a
+  handle registry, `LibFFI` type/ABI getters stubbed, `apiCreateCIF` → null).
+- Vanilla resources resolve through Web Image's `resource:` file system (warning only).
+- Remaining noise: Cp1252 `native.encoding`, OSHI `LinuxOperatingSystem` (only from crash reports),
+  "Log4j API could not find a logging provider" (some mod uses log4j-api directly).
+
+## Phase 3 (in progress)
+
+Shader path (desktop renderpearl: shaderc for GLSL→SPIR-V, SPIRV-Cross for reflection):
+- **glslang → wasm:** `node tools/glslang-wasm/build.mjs` builds Khronos glslang 16.6.0 with
+  wasi-sdk 34 (both pinned + sha256-checked, in `D:\Claude\toolchains`) into
+  `build/glslang-wasm/glslang.wasm` (2.7 MiB). Entry points in `tools/glslang-wasm/glslang_web.c`
+  (Vulkan 1.2 / SPIR-V 1.5, Vulkan rules, auto-mapped bindings = shaderc's settings; includes and
+  defines are expanded on the Java side). Loader: `web/dev/glslang.js` (minimal WASI shim).
+  Gotcha: needs an 8 MiB stack (`-z stack-size`), the bison parser overflows wasm-ld's 64 KiB.
+- **SPIR-V side (pure Java, `platform/web/.../gpu/spirv`)**: `SpirvModule` parser,
+  `SpirvReflection` (renderpearl's `SpvModule.Reflection` from the SPIR-V: same resource kinds,
+  order and names as spvc; setters patch Location/Binding/DescriptorSet words in place),
+  `WgslTranslator` (structured control flow incl. loops/continuing/switch/phis, GLSL.std.450,
+  images; combined image samplers → texture `@binding(2b)` + sampler `2b+1`; texel buffers →
+  storage arrays with format-aware loads; push constants → `@group(1) @binding(0)` storage;
+  stage IO through private globals and a generated entry point; vertex Y negated so framebuffers
+  match Vulkan's layout; `diagnostic(off, derivative_uniformity)`).
+- **Test corpus:** `node tools/run-baked.mjs --selftest --shader-corpus` records every pipeline the
+  desktop game compiles (GLSL inputs + exactly what the backend receives: patched SPIR-V and the
+  pipeline description) into `build/shader-corpus` (393 pipelines incl. Sodium's 3 terrain ones).
+  `node tools/shadertest/run.mjs` translates them all (393/393), and
+  `http://localhost:4173/wgsl-check.html` compiles them with WebGPU and builds render pipelines
+  (auto layout): 392/393 OK, the remaining one was the page passing `writeMask = -1` (Sodium uses
+  -1 for "all"; the backend must mask with 15).
+- Facts for the backend: default depth test is `GREATER_THAN_OR_EQUAL` (reversed Z); topologies
+  QUADS (319), TRIANGLES, LINES, TRIANGLE_FAN (12, no WebGPU equivalent), TRIANGLE_STRIP, POINTS;
+  WIREFRAME pipelines are skipped when the device reports no `wireframeFillMode`; color targets
+  include RGBA16_FLOAT and R32_FLOAT (OIT, MAX/ADD blending → `float32-blendable`); Sodium terrain:
+  20-byte push constants, R32_SINT texel buffer, attribute formats RG32_UINT/RGBA8_UNORM/RG16_UINT/
+  RGBA8_UINT. Sodium 0.9 has `GLDrawContext` and `VKDrawContext` (backend-specific draw paths).
+
+Next: WebGPU `GpuDeviceBackend` (device, buffers, textures, samplers, command encoder, render
+pass, pipelines with explicit layouts, surface on the canvas), `GlslCompiler` substitution calling
+glslang wasm, then the title screen.

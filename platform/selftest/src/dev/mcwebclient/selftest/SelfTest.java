@@ -42,6 +42,12 @@ public final class SelfTest {
         ticks++;
         stageTicks++;
         try {
+            if (ticks == 1 && ShaderCorpus.enabled()) {
+                // Recompile everything through the recorders (startup compiled before ticks began).
+                ShaderCorpus.install();
+                log("shader corpus recording; reloading resources");
+                mc.reloadResourcePacks();
+            }
             switch (stage) {
                 case WAIT_TITLE -> waitTitle(mc);
                 case CREATING -> creating(mc);
@@ -107,6 +113,9 @@ public final class SelfTest {
                     );
             screenshot(mc, "selftest-world.png");
         } else if (renderedTicks == 100 || stageTicks == 20 * 95) {
+            if (ShaderCorpus.enabled()) {
+                log("shader corpus: " + ShaderCorpus.summary());
+            }
             log("PASS");
             next(Stage.DONE);
             mc.stop();

@@ -3,6 +3,8 @@ package dev.mcwebclient.web.exec;
 import java.util.Set;
 
 import dev.mcwebclient.web.WebJs;
+import dev.mcwebclient.web.mods.EntityCullingSubstitutions;
+import net.minecraft.client.Minecraft;
 
 /**
  * Thread.start on a single thread. A thread whose body finishes (connectors, one-shot
@@ -32,6 +34,25 @@ public final class WebThreads {
             WebJs.log("[threads] not starting long-running thread '" + name + "' (" + type + ")");
             return;
         }
+        if (name.equals("CullThread")) {
+            // EntityCulling: run() is substituted with a single pass (mods/EntityCullingSubstitutions).
+            repeat(thread, EntityCullingSubstitutions.sleepDelayMillis() * 1_000_000L);
+            return;
+        }
         WebScheduler.submit(thread::run);
+    }
+
+    /** Runs a thread's (single-pass) body every {@code periodNanos} until the game stops. */
+    private static void repeat(Thread thread, long periodNanos) {
+        WebScheduler.schedule(() -> {
+            if (!Minecraft.getInstance().isRunning()) {
+                return;
+            }
+            try {
+                thread.run();
+            } finally {
+                repeat(thread, periodNanos);
+            }
+        }, periodNanos);
     }
 }

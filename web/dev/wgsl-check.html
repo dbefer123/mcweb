@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WGSL Corpus Check</title>
+<style>
+  :root { color-scheme: light dark; --bg: #fff; --fg: #111; --muted: #666; --bad: #b00020; --good: #0a7a2f; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #121212; --fg: #eee; --muted: #999; --bad: #ff6b6b; --good: #5fd38d; } }
+  body { background: var(--bg); color: var(--fg); font: 14px/1.4 system-ui, sans-serif; margin: 16px; }
+  #summary { font-weight: 600; margin-bottom: 12px; }
+  .bad { color: var(--bad); }
+  .good { color: var(--good); }
+  pre { white-space: pre-wrap; word-break: break-word; font-size: 12px; color: var(--muted); }
+</style>
+</head>
+<body>
+<div id="summary">Checking...</div>
+<div id="results"></div>
+<script type="module" src="wgsl-check.js"></script>
+</body>
+</html>

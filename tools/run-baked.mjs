@@ -50,7 +50,11 @@ if (compileOnly) process.exit(0);
 const selftest = gameArgs.includes("--selftest");
 // --trace records reflection/resource/proxy use for native-image (GraalVM tracing agent).
 const trace = gameArgs.includes("--trace");
-const passArgs = gameArgs.filter((a) => a !== "--selftest" && a !== "--trace");
+// --shader-corpus records every pipeline compile into build/shader-corpus (see ShaderCorpus.java).
+const shaderCorpus = gameArgs.includes("--shader-corpus");
+const passArgs = gameArgs.filter((a) => a !== "--selftest" && a !== "--trace" && a !== "--shader-corpus");
+const corpusDir = join(BUILD, "shader-corpus");
+if (shaderCorpus) rmSync(corpusDir, { recursive: true, force: true });
 const traceDir = join(BUILD, "trace-config");
 const agentArgs = trace ? [`-agentlib:native-image-agent=config-merge-dir=${traceDir}`] : [];
 
@@ -77,6 +81,7 @@ run(JAVA, [
   ...agentArgs,
   `-Djava.io.tmpdir=${TMP}`,
   `-Dmcweb.selftest=${selftest}`,
+  ...(shaderCorpus ? [`-Dmcweb.shaderCorpus=${corpusDir}`] : []),
   "-cp", classpath,
   "dev.mcwebclient.fabric.BakedLauncher",
   "--username", "Player",

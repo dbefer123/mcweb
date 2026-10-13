@@ -74,6 +74,7 @@ final class Baker {
     private final Set<String> unresolved = new TreeSet<>();
     private final Map<String, Integer> changedPerMod = new TreeMap<>();
     private final List<String> modLines = new ArrayList<>();
+    private EntrypointTable entrypoints;
 
     private static String require(String key) {
         String v = System.getProperty(key);
@@ -136,6 +137,9 @@ final class Baker {
         writeJar(out.resolve("minecraft-baked.jar"), mcClasses, mcResources);
         writeJar(out.resolve("mods-baked.jar"), modClasses, modResources);
         writeJar(out.resolve("libs-baked.jar"), libClasses, Map.of());
+        entrypoints = new EntrypointTable(this::bakedClass);
+        entrypoints.write(loader, out.resolve("gen-src"), SKIP_MODS);
+        log("entrypoint table written; " + entrypoints.notes().size() + " entrypoints left to reflection");
         writeReport(loader, (System.nanoTime() - t0) / 1_000_000L);
         log("done in " + (System.nanoTime() - t0) / 1_000_000L + " ms -> " + out);
     }
@@ -386,6 +390,7 @@ final class Baker {
         sb.append("},\n");
         list(sb, "mods", modLines);
         list(sb, "entrypoints", entrypointLines(loader));
+        list(sb, "entrypointsNotBaked", entrypoints.notes());
         list(sb, "skippedMixinClasses", skippedMixinClasses);
         list(sb, "generatedClasses", synthetic);
         list(sb, "unresolvedReferences", unresolved);
@@ -396,6 +401,14 @@ final class Baker {
         }
         sb.append("\n  }\n}\n");
         Files.writeString(out.resolve("bake-report.json"), sb.toString(), StandardCharsets.UTF_8);
+    }
+
+    private byte[] bakedClass(String internal) {
+        byte[] b = modClasses.get(internal);
+        if (b == null) {
+            b = mcClasses.get(internal);
+        }
+        return b != null ? b : libClasses.get(internal);
     }
 
     private static List<String> entrypointLines(FabricLoader loader) {

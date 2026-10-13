@@ -4,13 +4,27 @@
     {
       "name": "spike",
       "runtimeExecutable": "node",
-      "runtimeArgs": ["tools/static-server.mjs", "spike/webimage/web", "4180"],
+      "runtimeArgs": [
+        "tools/static-server.mjs",
+        "spike/webimage/web",
+        "4180"
+      ],
       "port": 4180
     },
     {
       "name": "dev",
       "runtimeExecutable": "node",
-      "runtimeArgs": ["tools/static-server.mjs", "web/dev", "4173", "--mount", "/image=build/image/out"],
+      "runtimeArgs": [
+        "tools/static-server.mjs",
+        "web/dev",
+        "4173",
+        "--mount",
+        "/image=build/image/out",
+        "--mount",
+        "/corpus=build/shader-corpus",
+        "--mount",
+        "/glslang=build/glslang-wasm"
+      ],
       "port": 4173
     }
   ]

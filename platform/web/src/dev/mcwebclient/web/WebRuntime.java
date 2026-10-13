@@ -46,8 +46,11 @@ public final class WebRuntime {
         setIfMissing("java.vendor", "Oracle Corporation");
         setIfMissing("java.class.path", "");
         setIfMissing("java.library.path", "");
-        setIfMissing("file.encoding", "UTF-8");
-        setIfMissing("sun.jnu.encoding", "UTF-8");
+        // Build-time values leak in from the Windows build machine (Cp1252), which the
+        // image has no charset for.
+        for (String key : new String[]{"file.encoding", "native.encoding", "sun.jnu.encoding", "stdout.encoding", "stderr.encoding"}) {
+            System.setProperty(key, "UTF-8");
+        }
         setIfMissing("minecraft.launcher.brand", "mcweb");
         System.setProperty("user.home", ROOT.toString());
         System.setProperty("java.awt.headless", "true");
@@ -63,6 +66,7 @@ public final class WebRuntime {
         setIfMissing("log4j.provider", "org.apache.logging.log4j.simple.internal.SimpleProvider");
         setIfMissing("org.apache.logging.log4j.simplelog.level", "INFO");
         setIfMissing("org.apache.logging.log4j.simplelog.logFile", "system.out");
+        dev.mcwebclient.web.net.WebUrlHandlers.install();
         long scratch = dev.mcwebclient.web.mem.NativeHeap.malloc(64);
         dev.mcwebclient.web.mem.Nmem.selfCheck(scratch);
         dev.mcwebclient.web.mem.NativeHeap.free(scratch);
@@ -70,12 +74,24 @@ public final class WebRuntime {
         Files.createDirectories(ASSETS_DIR);
         Files.createDirectories(LOADER_DIR);
         Files.createDirectories(Path.of(System.getProperty("java.home")));
+        // Some mods open "config/..." relative to the working directory, which is the game
+        // directory on the desktop. Web Image fixes the file system's working directory
+        // (user.dir), so link its config/ to the game's.
+        Path cwd = Path.of("").toAbsolutePath();
+        if (!cwd.equals(GAME_DIR)) {
+            Path link = cwd.resolve("config");
+            if (Files.notExists(link, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+                Files.createDirectories(GAME_DIR.resolve("config"));
+                Files.createSymbolicLink(link, GAME_DIR.resolve("config"));
+            }
+        }
         int files = unpackEmbedded();
         int hostFiles = importHostFiles();
         try (var s = Files.list(LOADER_DIR)) {
             fabricLoaderJar = s.filter(p -> p.getFileName().toString().startsWith("fabric-loader")).findFirst().orElse(null);
         }
-        WebJs.log("[web] boot: unpacked " + files + " embedded files, " + hostFiles + " files from the page; loader jar " + fabricLoaderJar);
+        WebJs.log("[web] boot: unpacked " + files + " embedded files, " + hostFiles + " files from the page; loader jar " + fabricLoaderJar
+                + "; working directory " + cwd);
     }
 
     /**

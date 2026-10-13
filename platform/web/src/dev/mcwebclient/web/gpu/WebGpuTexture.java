@@ -95,6 +95,8 @@ final class WebGpuTexture extends BaseGpuTexture {
             }
         }
         WebGpuDevice.current().releaseBindings(id);
-        WebGpu.destroy(id);
+        // As for buffers: encoded commands may still use it until the next submit.
+        int destroyId = id;
+        WebGpuDevice.current().afterNextSubmit(() -> WebGpu.destroy(destroyId));
     }
 }

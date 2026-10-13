@@ -147,7 +147,10 @@ class WebGpuBuffer extends BaseGpuBuffer {
         }
         closed = true;
         WebGpuDevice.current().releaseBindings(id);
-        WebGpu.destroy(id);
+        // Commands already encoded may use the buffer, and WebGPU rejects a submit that
+        // references a destroyed buffer: destroy it once those commands are submitted.
+        int destroyId = id;
+        WebGpuDevice.current().afterNextSubmit(() -> WebGpu.destroy(destroyId));
         if (shadow != 0) {
             // Readbacks still in flight would write here: free after the next frame.
             long s = shadow;

@@ -261,10 +261,46 @@ stub). Further fixes on the way to the title screen:
 - **First frames:** the Mojang loading screen renders in the browser through the WebGPU backend
   (2026-10-13). The frame pump runs; shaders compile through glslang wasm (needs
   `GL_GOOGLE_cpp_style_line_directive` after `#version`, as shaderc enables it implicitly).
-- Include text corruption: Minecraft can read shader include sources after closing them; with
-  nmem reusing freed blocks immediately the text was overwritten by I/O buffers → include
-  sources are never freed. `NativeHeap` now detects double/invalid frees (slot bitmaps), logs
-  them with a stack and ignores them.
+- Include text corruption ("character literals not supported", garbage after an include): our
+  include expansion read the text with `ShadercIncludeResult.contentString()`, which reads up to
+  a NUL; Minecraft stores the text without one (`memUTF8(s, false)`), so the read ran on into
+  stale memory (left-over zip bytes from the page's file import). LWJGL's `content()` buffer is
+  NUL-terminated too (`memByteBufferNT1`), so the fix reads pointer + `content_length`
+  directly, as shaderc does. (An earlier theory, use-after-free of the include memory,
+  was wrong: a scan of nmem found both include structs intact with the right lengths.)
+  `NativeHeap` still detects double/invalid frees (slot bitmaps), logs them and ignores them.
+- Relative `config/...` paths (EntityCulling): Web Image fixes the Jimfs working directory from
+  `user.dir`, which isn't the game dir → `<cwd>/config` is a symlink to `/root/game/config`.
+- Build-time `native.encoding=Cp1252` leaked from Windows → encodings forced to UTF-8 at boot.
+- Hidden pages get no animation frames (or ~1/s), which froze loading at "1 fps" whenever the
+  browser pane/tab was hidden, and would let server connections time out in a background tab.
+  The host now drives frames from a worker timer (~30 Hz) while `document.hidden`: loading
+  runs at ~20-30 fps hidden, ~17 ms per frame in the game.
+- All 393 pipelines compile in the browser (no glslang errors) after the include fix.
+- HTTP: Web Image's http/https handler is unusable for the game (plain `URLConnection`, rejects
+  every proxy incl. `NO_PROXY`, refuses the main thread); the failed Realms check escaped as an
+  unchecked `RealmsHttpException` and stopped the game. `net/WebUrlHandlers` is installed as the
+  `URLStreamHandlerFactory` at boot: `HttpURLConnection`s that fail at connect with
+  `ConnectException` (= offline on desktop). A real transport comes with Phase 6.
+- ICU4J data (`langInfo.res` etc., for likely subtags/bidi) is now in the image: the 10 files
+  the desktop trace read (~1 MB).
+- With those, the whole resource reload completes (all atlases built, Realms check fails
+  gracefully) and the first screen starts drawing. Then:
+  - `Unsafe.copySwapMemory0` is missing in Web Image even heap-to-heap (ICU bidi data read
+    big-endian into a `char[]`): `ScopedMemoryAccess.copySwapMemory` now always swaps through
+    a `byte[]`.
+  - WebGPU "buffer used in submit while destroyed": Minecraft closes buffers/textures right
+    after recording commands that use them (fine in GL/Vulkan); the WebGPU destroy is now
+    deferred until after the next submit.
+  - Sodium generates a `VertexSerializer` class per vertex-format pair at run time
+    (`Lookup.defineClass`), impossible in the image → `createSerializer` substituted with an
+    interpreted serializer over Sodium's own copy list (bulk copy when formats match). A scan
+    of all baked classes found no other runtime class definition (MixinExtras' LocalRef
+    generator only runs at mixin-apply time; its generated impls are in the bake).
+- Dev page: `mcweb.nmem` is the image's linear memory, for inspection from the console;
+  `mcweb.frameStats()` lists recent frames (gap between frames, ms in the game callback); the
+  log panel is updated in batches (per-message DOM appends + scroll forced ~230 ms of layout
+  per frame while loading).
 - `log4j-api` users get its SimpleProvider (console) instead of no provider.
 
 Next: title screen.

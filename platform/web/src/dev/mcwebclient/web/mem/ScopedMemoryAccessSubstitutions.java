@@ -45,8 +45,6 @@ final class Target_jdk_internal_misc_ScopedMemoryAccess {
     @Alias private native void putLongUnalignedInternal(MemorySessionImpl s, Object b, long o, long v, boolean be);
     @Alias private native void copyMemoryInternal(MemorySessionImpl ss, MemorySessionImpl ds, Object sb, long so,
                                                   Object db, long dOff, long bytes);
-    @Alias private native void copySwapMemoryInternal(MemorySessionImpl ss, MemorySessionImpl ds, Object sb, long so,
-                                                      Object db, long dOff, long bytes, long elemSize);
     @Alias private native void setMemoryInternal(MemorySessionImpl s, Object o, long off, long bytes, byte v);
 
     // ---- aligned (native order) ----
@@ -241,11 +239,9 @@ final class Target_jdk_internal_misc_ScopedMemoryAccess {
     @Substitute
     public void copySwapMemory(MemorySessionImpl ss, MemorySessionImpl ds, Object sb, long so, Object db, long dOff,
                                long bytes, long elemSize) {
-        if (sb != null && db != null) {
-            copySwapMemoryInternal(ss, ds, sb, so, db, dOff, bytes, elemSize);
-            return;
-        }
-        // Rare (non-native-order bulk copies); go element by element through a byte[].
+        // Non-native-order bulk copies (e.g. ICU reading big-endian data into a char[]).
+        // Web Image has no Unsafe.copySwapMemory0, even for heap-to-heap copies, so swap
+        // element by element in a byte[].
         byte[] tmp = new byte[(int) bytes];
         long tmpBase = sun.misc.Unsafe.ARRAY_BYTE_BASE_OFFSET;
         copyMemory(ss, null, sb, so, tmp, tmpBase, bytes);

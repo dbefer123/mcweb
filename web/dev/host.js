@@ -11,34 +11,85 @@ Error.stackTraceLimit = 200;
   const MAX_LINES = 4000;
   let lines = 0;
 
+  // Messages are added to the panel in batches: touching the DOM (and scrolling, which
+  // forces a layout) once per message cost hundreds of ms per frame during loading.
+  let pending = [];
+  let flushTimer = 0;
   function append(msg) {
-    const text = String(msg);
-    const span = document.createElement("span");
-    if (/\/(ERROR|FATAL)\]|\[fail\]|Exception|Error:/.test(text)) span.className = "error";
-    else if (/\/WARN\]/.test(text)) span.className = "warn";
-    span.textContent = text + "\n";
-    logEl.appendChild(span);
-    if (++lines > MAX_LINES) {
+    pending.push(String(msg));
+    if (!flushTimer) flushTimer = setTimeout(flushLog, 100);
+  }
+  function flushLog() {
+    flushTimer = 0;
+    const batch = pending;
+    pending = [];
+    const fragment = document.createDocumentFragment();
+    for (const text of batch.slice(-MAX_LINES)) {
+      const span = document.createElement("span");
+      if (/\/(ERROR|FATAL)\]|\[fail\]|Exception|Error:/.test(text)) span.className = "error";
+      else if (/\/WARN\]/.test(text)) span.className = "warn";
+      span.textContent = text + "\n";
+      fragment.appendChild(span);
+    }
+    lines += fragment.childNodes.length;
+    logEl.appendChild(fragment);
+    while (lines > MAX_LINES) {
       logEl.removeChild(logEl.firstChild);
       lines--;
     }
     if (follow.checked) logEl.scrollTop = logEl.scrollHeight;
   }
 
+  // Frame timing: `gap` is the time between animation frames, `cb` the time spent in the
+  // game's frame callback. mcweb.frameStats() returns the recent frames.
+  const FRAME_HISTORY = 240;
+  const frameLog = [];
   let frameCallback = null;
   let frames = 0;
+  let cbTotal = 0;
   let lastFpsAt = performance.now();
+  let lastFrameAt = 0;
   function loop(now) {
+    requestAnimationFrame(loop);
+    runFrame(now);
+  }
+
+  // A hidden page gets no animation frames, which would freeze loading and let server
+  // connections time out. While hidden, a worker timer (not throttled like the page's
+  // timers) drives the game at a lower rate instead.
+  const HIDDEN_FRAME_MS = 33;
+  const ticker = new Worker(URL.createObjectURL(new Blob(
+    [`setInterval(() => postMessage(0), ${HIDDEN_FRAME_MS});`], { type: "text/javascript" })));
+  let lastFrameEnd = 0;
+  ticker.onmessage = () => {
+    // Ticks that queued up behind a long frame are dropped, leaving the thread some air.
+    const now = performance.now();
+    if (document.hidden && now - lastFrameEnd >= HIDDEN_FRAME_MS / 4) {
+      runFrame(now);
+      lastFrameEnd = performance.now();
+    }
+  };
+
+  function runFrame(now) {
     if (frameCallback) {
-      frameCallback();
-      frames++;
-      if (now - lastFpsAt >= 1000) {
-        fpsEl.textContent = `${Math.round((frames * 1000) / (now - lastFpsAt))} fps`;
-        frames = 0;
-        lastFpsAt = now;
+      const start = performance.now();
+      try {
+        frameCallback();
+      } finally {
+        const cb = performance.now() - start;
+        frameLog.push({ at: Math.round(now), gap: lastFrameAt ? Math.round(now - lastFrameAt) : 0, cb: Math.round(cb) });
+        if (frameLog.length > FRAME_HISTORY) frameLog.shift();
+        lastFrameAt = now;
+        cbTotal += cb;
+        frames++;
+        if (now - lastFpsAt >= 1000) {
+          fpsEl.textContent = `${Math.round((frames * 1000) / (now - lastFpsAt))} fps, ${Math.round(cbTotal / frames)} ms/frame in game`;
+          frames = 0;
+          cbTotal = 0;
+          lastFpsAt = now;
+        }
       }
     }
-    requestAnimationFrame(loop);
   }
 
   globalThis.mcweb = {
@@ -55,6 +106,9 @@ Error.stackTraceLimit = 200;
     },
     setFrameCallback(cb) {
       frameCallback = cb;
+    },
+    frameStats() {
+      return frameLog.slice();
     },
   };
   // Java System.out/err go to console.log/error: mirror them into the panel too.
@@ -76,7 +130,14 @@ Error.stackTraceLimit = 200;
   async function initGraphics() {
     const [{ initWebGpu, createGpuHost }, { createGlslang }] = await Promise.all([import("./webgpu.js"), import("./glslang.js")]);
     const { adapter, device } = await initWebGpu();
-    globalThis.mcweb.gpu = createGpuHost({ device, adapter, canvas: globalThis.mcweb.canvas, log: append });
+    const gpu = createGpuHost({ device, adapter, canvas: globalThis.mcweb.canvas, log: append });
+    // Development: keep a handle on the image's linear memory for inspection from the console.
+    const attach = gpu.attach;
+    gpu.attach = (memory) => {
+      globalThis.mcweb.nmem = memory;
+      attach(memory);
+    };
+    globalThis.mcweb.gpu = gpu;
     append(`[host] WebGPU: ${adapter.info?.vendor ?? "?"} ${adapter.info?.architecture ?? ""} (${[...device.features].join(", ")})`);
     const wasm = await (await fetch("glslang/glslang.wasm")).arrayBuffer();
     const glslang = await createGlslang(wasm, (line) => append(`[glslang] ${line}`));

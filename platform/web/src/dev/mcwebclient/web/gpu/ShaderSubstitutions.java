@@ -19,6 +19,7 @@ import dev.mcwebclient.web.mem.Nmem;
 import net.minecraft.client.renderer.ShaderDefines;
 import net.minecraft.resources.Identifier;
 import org.graalvm.webimage.api.JS;
+import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.util.shaderc.ShadercIncludeResult;
 
 /**
@@ -45,9 +46,13 @@ final class ShaderSubstitutions {
             ShaderSource.CachedIncludeSource inc = id == null ? null : shaderSource.getInclude(id);
             String content = null;
             if (inc != null) {
-                ShadercIncludeResult r = ShadercIncludeResult.create(inc.includeResultPtr());
-                if (!r.source_nameString().isEmpty()) {
-                    content = r.contentString();
+                // The strings are not NUL-terminated (memUTF8(s, false)); shaderc reads them by
+                // length, and so must we. LWJGL's accessors (content(), contentString()) look
+                // for a NUL and would run on into neighbouring memory.
+                long p = inc.includeResultPtr();
+                if (ShadercIncludeResult.nsource_name_length(p) != 0) {
+                    content = MemoryUtil.memUTF8(MemoryUtil.memGetAddress(p + ShadercIncludeResult.CONTENT),
+                            (int) ShadercIncludeResult.ncontent_length(p));
                 }
             }
             if (content == null) {
@@ -93,19 +98,6 @@ final class ShaderSubstitutions {
     @JS.Coerce
     @JS(value = "return globalThis.mcweb.glsl.lastLog();", args = {})
     private static native String glslLog();
-}
-
-/**
- * Include sources live in native memory (shaderc's include-result struct). Minecraft can
- * read them after closing them (the UI preload's fallback pipeline cache): harmless with
- * desktop malloc, but nmem's allocator reuses freed blocks at once and the text got
- * overwritten. Includes are a few KB per resource reload, so they are never freed.
- */
-@TargetClass(com.mojang.renderpearl.api.pipeline.ShaderSource.CachedIncludeSource.class)
-final class Target_com_mojang_renderpearl_api_pipeline_ShaderSource_CachedIncludeSource {
-    @Substitute
-    public void close() {
-    }
 }
 
 @TargetClass(com.mojang.renderpearl.frontend.shaders.GlslCompiler.class)

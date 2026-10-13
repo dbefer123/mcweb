@@ -1,10 +1,16 @@
 package dev.mcwebclient.web.mods;
 
+import java.util.List;
+
+import com.mojang.renderpearl.api.vertex.VertexFormat;
 import com.oracle.svm.core.annotate.Alias;
 import com.oracle.svm.core.annotate.Substitute;
 import com.oracle.svm.core.annotate.TargetClass;
 
 import dev.mcwebclient.web.mem.Nmem;
+import net.caffeinemc.mods.sodium.api.vertex.serializer.VertexSerializer;
+import net.caffeinemc.mods.sodium.client.render.vertex.serializers.VertexSerializerRegistryImpl;
+import net.caffeinemc.mods.sodium.client.render.vertex.serializers.generated.VertexSerializerFactory;
 import org.joml.FrustumIntersection;
 import org.joml.Vector4f;
 
@@ -175,5 +181,69 @@ final class Target_net_caffeinemc_mods_sodium_client_render_viewport_frustum_Sim
     @Substitute
     public int intersectAab(float minX, float minY, float minZ, float maxX, float maxY, float maxZ) {
         return frustum.intersectAab(minX, minY, minZ, maxX, maxY, maxZ);
+    }
+}
+
+/**
+ * Sodium generates a class per (source, destination) vertex format pair that copies the
+ * destination's attributes out of each source vertex. Classes can't be defined at run time
+ * in the image, so the same copy list drives an interpreted serializer instead.
+ */
+@TargetClass(VertexSerializerRegistryImpl.class)
+final class Target_net_caffeinemc_mods_sodium_client_render_vertex_serializers_VertexSerializerRegistryImpl {
+    @Substitute
+    private static VertexSerializer createSerializer(VertexFormat srcFormat, VertexFormat dstFormat) {
+        List<VertexSerializerFactory.MemoryTransfer> transfers =
+                Target_net_caffeinemc_mods_sodium_client_render_vertex_serializers_generated_VertexSerializerFactory
+                        .createMemoryTransferList(srcFormat, dstFormat);
+        return new InterpretedVertexSerializer(transfers, srcFormat.getVertexSize(), dstFormat.getVertexSize());
+    }
+}
+
+@TargetClass(VertexSerializerFactory.class)
+final class Target_net_caffeinemc_mods_sodium_client_render_vertex_serializers_generated_VertexSerializerFactory {
+    @Alias
+    static native List<VertexSerializerFactory.MemoryTransfer> createMemoryTransferList(VertexFormat srcFormat, VertexFormat dstFormat);
+}
+
+/** The generated serializer's loop, with the copy list as data. */
+final class InterpretedVertexSerializer implements VertexSerializer {
+    private final int[] src;
+    private final int[] dst;
+    private final int[] length;
+    private final int srcStride;
+    private final int dstStride;
+    /** One transfer covering whole vertices of the same size: a single bulk copy. */
+    private final boolean identity;
+
+    InterpretedVertexSerializer(List<VertexSerializerFactory.MemoryTransfer> transfers, int srcStride, int dstStride) {
+        int n = transfers.size();
+        this.src = new int[n];
+        this.dst = new int[n];
+        this.length = new int[n];
+        for (int i = 0; i < n; i++) {
+            VertexSerializerFactory.MemoryTransfer t = transfers.get(i);
+            src[i] = t.src();
+            dst[i] = t.dst();
+            length[i] = t.length();
+        }
+        this.srcStride = srcStride;
+        this.dstStride = dstStride;
+        this.identity = n == 1 && src[0] == 0 && dst[0] == 0 && length[0] == srcStride && srcStride == dstStride;
+    }
+
+    @Override
+    public void serialize(long srcPtr, long dstPtr, int vertexCount) {
+        if (identity) {
+            Nmem.copy(srcPtr, dstPtr, (long) vertexCount * srcStride);
+            return;
+        }
+        for (int v = 0; v < vertexCount; v++) {
+            for (int i = 0; i < src.length; i++) {
+                Nmem.copy(srcPtr + src[i], dstPtr + dst[i], length[i]);
+            }
+            srcPtr += srcStride;
+            dstPtr += dstStride;
+        }
     }
 }

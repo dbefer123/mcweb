@@ -167,6 +167,11 @@ const resources = [
   // Read from the class path directly (Language.loadDefault, DeprecatedTranslationsInfo).
   "assets/minecraft/lang/en_us\\.json", "assets/minecraft/lang/deprecated\\.json",
   "META-INF/services/.*",
+  // ICU4J data the game reads (bidi text, likely subtags for locales); the set the desktop
+  // trace recorded, ~1 MB of the jar's ~13 MB.
+  "com/ibm/icu/ICUConfig\\.properties",
+  "com/ibm/icu/impl/data/icudata/(langInfo|numberingSystems|pool|root|supplementalData|zoneinfo64)\\.res",
+  "com/ibm/icu/impl/data/icudata/(pnames|ubidi|uprops)\\.icu",
 ];
 const parallelism = (argv.find((a) => a.startsWith("--parallelism=")) || "--parallelism=4").slice(14);
 const niArgs = [

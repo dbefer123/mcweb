@@ -6,6 +6,12 @@
       "runtimeExecutable": "node",
       "runtimeArgs": ["tools/static-server.mjs", "spike/webimage/web", "4180"],
       "port": 4180
+    },
+    {
+      "name": "dev",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["tools/static-server.mjs", "web/dev", "4173", "--mount", "/image=build/image/out"],
+      "port": 4173
     }
   ]
 }

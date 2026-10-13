@@ -92,8 +92,46 @@ Commands (in order): `node tools/stage-inputs.mjs` → `node tools/bake.mjs` →
 - 26.3 uses SDL3 (not GLFW), and LWJGL shaderc/spvc/spng/freetype/jemalloc/vma natives → all need
   browser replacements. Vanilla has an MDI chunk path (`prepareChunkRendersIndirect`).
 
-## Next (Phase 2)
+## Phase 2 (in progress)
 
-- Spike: Inflater/Deflater, zipfs, `resource:` NIO FS, jimfs behaviour in Web Image.
-- First full image attempt: baked jars + libs, logging → simple SLF4J provider, LWJGL natives,
-  threads/executors (inline first), main loop driven by requestAnimationFrame.
+Build: `node tools/build-image.mjs [--xmx=10g] [--parallelism=4]` → `build/image/out/minecraft.js(.wasm)`.
+Dev page: `.claude/launch.json` "dev" → `http://127.0.0.1:4173` (`web/dev/`, `/image/` → build output).
+
+Web Image probe (spike2): NIO default FS is in-memory (`/root`), FileChannel/RandomAccessFile and
+embedded resources (`resource:` FS) work. Broken out of the box: zlib (`Inflater`/`Deflater` are
+UOE stubs), `FileInputStream.length0`, `LockSupport.park` (throws), `Thread.start` (silently
+drops the thread).
+
+Runtime layer (`platform/web`), all via GraalVM substitutions (Web Image's own are disabled with
+`-H:DisableSubstitution`):
+- `jdk/`: JZlib-backed `Inflater`/`Deflater`, pure-Java CRC32/Adler32, `ZipUtils.loadLibrary` no-op,
+  cooperative `Unsafe.park`, `Thread.start0` → `WebThreads` (one-shot threads run as tasks; known
+  looping threads are not started), `FileInputStream.length0/position0` = 0.
+- `exec/`: `WebScheduler` (task queue pumped per frame and inside park; deadlock detector after 20 s
+  idle parking), `WebExecutorService`.
+- `mc/`: `Util.makeExecutor/makeIoExecutor` → cooperative; `Minecraft.run()` → `FramePump`
+  (rAF-driven `pollEvents` + `runTick`, then throws `MainLoopDetached`; fires Fabric API's
+  `CLIENT_STARTED` itself because the baked `run()` had that injection);
+  `PreferredGraphicsApi.getBackendsToTry` → `WebGpuBackend` only; Vulkan availability check → null.
+- `fabric/`: `WebLauncher` + `WebGameProvider` (no class path; mods read from VFS jars),
+  `UrlUtil.getCodeSource` → VFS copy of the loader jar.
+- `log/`: SLF4J console provider; `LogUtils` log4j-core methods substituted; log4j-core and
+  log4j-slf4j2-impl excluded from the image.
+- `mem/`: `Nmem` (WAT intrinsics on exported memory `nmem`), `NativeHeap` (size-class slabs +
+  best-fit coalescing large blocks), `WasmMemoryBackend` (LWJGL 3.4 `MemoryBackend`),
+  `ScopedMemoryAccess` substitution (null base → nmem, else JDK internals) so real
+  `DirectByteBuffer`s live in nmem; LWJGL `Library.loadSystem`/`MemoryAccessJNI` stubs.
+
+Findings:
+- 26.3 rendering is the new `com.mojang.renderpearl` library: `GpuBackend` → `GpuDeviceBackend`,
+  `GpuSurfaceBackend`, `CommandEncoderBackend`, `RenderPassBackend`, shaders as `SpvModule`.
+  Device = `new FrontendGpuDevice(backend)`. GL/Vulkan backends become unreachable.
+- Minecraft uses 83 distinct SDL3 functions (≈65 once GL/Vulkan ones drop) → plan: emulate the
+  LWJGL SDL binding methods rather than rewriting `Window`/`SDLEventHandler`.
+- Builder needs: argfile (cmd.exe 8191-char limit), filtered JOML jar (Java 1.2 package-info),
+  build-time init for our SLF4J classes (Netty creates loggers at build time), `-O1` and
+  `-H:ImageHeapObjectsPerFunction=10000` (V8 per-function size limit), low `--parallelism`
+  (analysis OOMed at 9 GB with default threads).
+- EntityCulling bundles shaded Sentry (`dev.tr7zw.lib.sentry`); make sure it can't report.
+
+Next: get the image through analysis/compile; then SDL emulation, WebGPU backend (Phase 3).

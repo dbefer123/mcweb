@@ -108,7 +108,12 @@ async function patch(input, output, spec) {
   for (const field of spec.moduleFields) await (write(field) ?? Promise.resolve());
   if (held !== null) await (write(held) ?? Promise.resolve());
   await new Promise((r) => out.end(r));
-  const missing = [...spec.replace.keys()].filter((k) => !found.has(k));
+  // An intrinsic class that isn't reachable is compiled away entirely; that's fine.
+  // But if some of a class's intrinsics exist and others don't, one was inlined or
+  // renamed and would silently run its placeholder body.
+  const owner = (fn) => fn.slice(0, fn.indexOf("_", 2));
+  const usedOwners = new Set([...found].map(owner));
+  const missing = [...spec.replace.keys()].filter((k) => !found.has(k) && usedOwners.has(owner(k)));
   return { found: found.size, missing };
 }
 

@@ -1,11 +1,20 @@
 // Minimal static file server for local testing (loopback only).
-// Usage: node tools/static-server.mjs <root> [port]
+// Usage: node tools/static-server.mjs <root> [port] [--mount /prefix=dir ...]
 import { createServer } from "node:http";
 import { createReadStream, statSync } from "node:fs";
 import { extname, join, normalize, resolve, sep } from "node:path";
 
-const root = resolve(process.argv[2] || ".");
-const port = Number(process.argv[3] || process.env.PORT || 4173);
+const args = process.argv.slice(2);
+const positional = args.filter((a, i) => !a.startsWith("--") && !(args[i - 1] === "--mount"));
+const root = resolve(positional[0] || ".");
+const port = Number(positional[1] || process.env.PORT || 4173);
+const mounts = [];
+for (let i = 0; i < args.length; i++) {
+  if (args[i] === "--mount") {
+    const [prefix, dir] = args[++i].split("=");
+    mounts.push({ prefix: prefix.replace(/\/$/, "") + "/", dir: resolve(dir) });
+  }
+}
 const types = {
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
@@ -18,10 +27,18 @@ const types = {
   ".txt": "text/plain; charset=utf-8",
 };
 
+function resolvePath(pathname) {
+  for (const m of mounts) {
+    if (pathname.startsWith(m.prefix)) return { base: m.dir, rel: pathname.slice(m.prefix.length) };
+  }
+  return { base: root, rel: pathname };
+}
+
 createServer((req, res) => {
   const url = new URL(req.url, "http://localhost");
-  let path = normalize(join(root, decodeURIComponent(url.pathname)));
-  if (path !== root && !path.startsWith(root + sep)) {
+  const { base, rel } = resolvePath(decodeURIComponent(url.pathname));
+  let path = normalize(join(base, rel));
+  if (path !== base && !path.startsWith(base + sep)) {
     res.writeHead(403).end();
     return;
   }
@@ -40,4 +57,7 @@ createServer((req, res) => {
   } catch {
     res.writeHead(404).end("not found");
   }
-}).listen(port, "127.0.0.1", () => console.log(`serving ${root} on http://127.0.0.1:${port}`));
+}).listen(port, "127.0.0.1", () => {
+  console.log(`serving ${root} on http://127.0.0.1:${port}`);
+  for (const m of mounts) console.log(`  ${m.prefix} -> ${m.dir}`);
+});

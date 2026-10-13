@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Minecraft Web (dev)</title>
+<link rel="stylesheet" href="dev.css">
+</head>
+<body>
+<main class="layout">
+  <section class="game">
+    <canvas id="game" width="854" height="480" tabindex="0" aria-label="Minecraft"></canvas>
+    <p class="status"><span id="stage">loading</span> · <span id="fps">–</span></p>
+  </section>
+  <section class="console" aria-label="Game log">
+    <div class="console-head">
+      <h1>Log</h1>
+      <label><input type="checkbox" id="follow" checked> follow</label>
+    </div>
+    <pre id="log"></pre>
+  </section>
+</main>
+<script src="host.js"></script>
+</body>
+</html>

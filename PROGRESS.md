@@ -13,7 +13,7 @@ multiplayer through a WebSocket↔TCP relay.
 | 1. Inputs + Fabric baker + desktop checkpoint | **Done** (2026-10-12) — local-server join deferred to Phase 5 |
 | 2. Headless image | **Done** (2026-10-13) |
 | 3. Rendering + input | **Done** (2026-10-13): title screen, menus, options, Sodium video settings; clicks, keys, text |
-| 4. Singleplayer | **Core done** (2026-10-13): integrated server as a green thread, worlds play and persist in OPFS across reloads. Open: world zip import/export, perf |
+| 4. Singleplayer | **Core done** (2026-10-13): integrated server as a green thread, worlds play and persist in OPFS across reloads. World zip import/export done. Open: perf (Phase 8) |
 | 5. Multiplayer | — |
 | 6. Microsoft sign-in | — |
 | 7. Completeness | — |
@@ -404,6 +404,11 @@ stub). Further fixes on the way to the title screen:
   (`nstbi_zlib_compress`, `..._tga_with_rle` were missing) → every PNG write failed (0-byte
   world icon and screenshots) → all four are nmem slots. `.fabric/` (extracted nested mod
   jars, ~10 MB) is no longer persisted.
+- Screenshots (F2) save real PNGs; world zip export/import: dev page "Worlds in browser
+  storage" panel (web/dev/worlds.js): export zips a world from OPFS (stored entries + CRC),
+  import reads stored/deflated zips (DecompressionStream; Windows "\\" names normalized),
+  finds the folder with level.dat and stores it under a free name; it shows up in the game
+  after a reload (verified: export → import → "New World (2)" listed).
 - **Deviation from the plan:** the integrated server runs as a green thread next to the
   client, not in a Worker. IntegratedServer is tied to the client's `Minecraft` object, and
   WasmGC heaps can't be shared between Workers (a Worker server would be a second image

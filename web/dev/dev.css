@@ -41,3 +41,14 @@ canvas { display: block; width: 100%; aspect-ratio: 16 / 9; background: #000; bo
 pre { margin: 0; padding: 8px 12px; overflow: auto; flex: 1; font: 12px/1.4 ui-monospace, Consolas, monospace; white-space: pre-wrap; word-break: break-word; }
 pre .warn { color: var(--warn); }
 pre .error { color: var(--error); }
+.worlds { margin-top: 16px; padding: 12px; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; }
+.worlds h2 { font-size: 14px; margin: 0 0 8px; }
+.worlds-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.worlds select { min-width: 12em; flex: 1 1 12em; }
+.worlds select, .worlds button, .worlds .button {
+  font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--border);
+  border-radius: 4px; padding: 4px 10px; min-height: 32px;
+}
+.worlds .button { display: inline-flex; align-items: center; cursor: pointer; }
+.worlds button:disabled { color: var(--muted); }
+.worlds button:focus-visible, .worlds .button:focus-within, .worlds select:focus-visible { outline: 2px solid var(--fg); outline-offset: 1px; }

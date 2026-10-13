@@ -11,6 +11,16 @@
   <section class="game">
     <canvas id="game" width="854" height="480" tabindex="0" aria-label="Minecraft"></canvas>
     <p class="status"><span id="stage">loading</span> · <span id="fps">–</span></p>
+    <section class="worlds" aria-labelledby="worlds-title">
+      <h2 id="worlds-title">Worlds in browser storage</h2>
+      <div class="worlds-row">
+        <select id="world-list" aria-label="World"></select>
+        <button id="world-export" type="button">Export .zip</button>
+        <label class="button">Import .zip<input id="world-import" type="file" accept=".zip,application/zip" hidden></label>
+        <button id="world-refresh" type="button">Refresh</button>
+      </div>
+      <p id="world-status" class="status" role="status"></p>
+    </section>
   </section>
   <section class="console" aria-label="Game log">
     <div class="console-head">
@@ -22,5 +32,9 @@
 </main>
 <script src="host.js"></script>
 <script src="input.js"></script>
+<script type="module">
+  import { attachWorldsPanel } from "./worlds.js";
+  attachWorldsPanel();
+</script>
 </body>
 </html>

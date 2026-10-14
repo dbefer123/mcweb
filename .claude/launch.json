@@ -25,7 +25,7 @@
         "--mount",
         "/glslang=build/glslang-wasm",
         "--mount",
-        "/assets=C:\\Users\\Cade N\\AppData\\Roaming\\PrismLauncher\\assets",
+        "/assets=%APPDATA%/PrismLauncher/assets",
         "--mount",
         "/bundle=build/bundle"
       ],

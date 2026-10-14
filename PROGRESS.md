@@ -1,6 +1,6 @@
 # Progress
 
-Plan: `C:\Users\Cade N\.claude\plans\all-right-so-here-wise-meerkat.md` (approved 2026-10-12).
+Plan: `~/.claude/plans/all-right-so-here-wise-meerkat.md` (local, approved 2026-10-12).
 Goal: Minecraft 26.3 + the Prism instance's Fabric mods, compiled to WebAssembly (GraalVM Web Image),
 rendered with WebGPU, singleplayer (integrated server as a green thread, see Phase 4),
 multiplayer through a WebSocket↔TCP relay.
@@ -19,6 +19,16 @@ multiplayer through a WebSocket↔TCP relay.
 | 7. Completeness | — |
 | 8. Performance | — |
 | 9. Hosting | — |
+
+## Phase 6 inputs (from the user)
+
+- Azure app (registered by the user, 2026-10-13): name "Minecraft Web Client", Application
+  (client) ID `d2fc80e0-2496-44f9-8277-20ed2c683faf`, directory (tenant) ID
+  `53e5da56-ecc2-4e0c-99fc-0084248220c2`. Not secrets. Sign-in must use the `consumers`
+  authority with the `XboxLive.signin` scope (SPA platform, PKCE, redirect
+  `http://localhost:4173`; add the hosted URL in Phase 9).
+- Mojang Minecraft API access requested via https://aka.ms/mce-reviewappid (2026-10-13).
+  Until approved, `api.minecraftservices.com` answers 403 for this app ID.
 
 ## Environment
 

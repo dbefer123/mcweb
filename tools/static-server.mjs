@@ -1,5 +1,6 @@
 // Minimal static file server for local testing (loopback only).
 // Usage: node tools/static-server.mjs <root> [port] [--mount /prefix=dir ...]
+// Mount directories may use environment variables: --mount /assets=%APPDATA%/PrismLauncher/assets
 import { createServer } from "node:http";
 import { createReadStream, statSync } from "node:fs";
 import { extname, join, normalize, resolve, sep } from "node:path";
@@ -12,7 +13,8 @@ const mounts = [];
 for (let i = 0; i < args.length; i++) {
   if (args[i] === "--mount") {
     const [prefix, dir] = args[++i].split("=");
-    mounts.push({ prefix: prefix.replace(/\/$/, "") + "/", dir: resolve(dir) });
+    const expanded = dir.replace(/%([A-Za-z_][A-Za-z0-9_]*)%/g, (m, name) => process.env[name] ?? m);
+    mounts.push({ prefix: prefix.replace(/\/$/, "") + "/", dir: resolve(expanded) });
   }
 }
 const types = {

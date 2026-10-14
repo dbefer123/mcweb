@@ -1,6 +1,7 @@
 # Progress
 
 Plan: `~/.claude/plans/all-right-so-here-wise-meerkat.md` (local, approved 2026-10-12).
+Repository: https://github.com/dbefer123/mcweb (public since 2026-10-13; original code only).
 Goal: Minecraft 26.3 + the Prism instance's Fabric mods, compiled to WebAssembly (GraalVM Web Image),
 rendered with WebGPU, singleplayer (integrated server as a green thread, see Phase 4),
 multiplayer through a WebSocket↔TCP relay.
